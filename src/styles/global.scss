@@ -1,0 +1,1953 @@
+// Carbon Design System — g100 dark theme applied via React Theme component
+@use '@carbon/react';
+
+// ─── Wave custom tokens ───────────────────────────────────────────────────────
+:root {
+  --wave-accent:           #e8a020;
+  --wave-accent-hover:     #f0b535;
+  --wave-accent-subtle:    rgba(232, 160, 32, 0.12);
+  --wave-sidebar-bg:       #0c0c0c;
+  --wave-sidebar-border:   #1f1f1f;
+  --wave-sidebar-width:    220px;
+
+  // Text scale — used consistently across all components
+  --wave-text-primary:     #f4f4f4;   // headings, names, strong values
+  --wave-text-secondary:   #c6c6c6;   // body copy, descriptions
+  --wave-text-tertiary:    #8d8d8d;   // supporting info, meta, size labels
+  --wave-text-muted:       #6f6f6f;   // captions, requirements, dim labels
+  --wave-text-faint:       #525252;   // dividers, placeholders, version
+}
+
+// ─── Base reset ───────────────────────────────────────────────────────────────
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: #161616;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  height: 100%;
+}
+
+// ─── Theme root ───────────────────────────────────────────────────────────────
+.wave-theme-root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+// ─── App shell ───────────────────────────────────────────────────────────────
+.wave-shell {
+  display: flex;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+// ─── Sidebar ─────────────────────────────────────────────────────────────────
+.wave-sidebar {
+  width: var(--wave-sidebar-width);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--wave-sidebar-bg);
+  border-right: 1px solid var(--wave-sidebar-border);
+  user-select: none;
+}
+
+.wave-sidebar__logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 16px 16px;
+  border-bottom: 1px solid var(--wave-sidebar-border);
+}
+
+.wave-sidebar__wordmark {
+  font-family: 'IBM Plex Mono', 'Courier New', monospace;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: #f4f4f4;
+  line-height: 1;
+}
+
+.wave-sidebar__nav {
+  flex: 1;
+  padding: 8px 0;
+  overflow-y: auto;
+}
+
+.wave-sidebar__nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 16px;
+  cursor: pointer;
+  border: none;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: #8d8d8d;
+  font-size: 14px;
+  font-weight: 400;
+  text-align: left;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+
+  svg {
+    flex-shrink: 0;
+    fill: currentColor;
+  }
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.04);
+    color: #c6c6c6;
+  }
+
+  &--active {
+    border-left-color: var(--wave-accent);
+    color: #f4f4f4;
+    background: var(--wave-accent-subtle);
+
+    svg {
+      fill: var(--wave-accent);
+    }
+  }
+}
+
+.wave-sidebar__footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--wave-sidebar-border);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--wave-text-faint);
+  letter-spacing: 0.04em;
+}
+
+// ─── Main content ─────────────────────────────────────────────────────────────
+.wave-main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  background: #161616;
+  display: flex;
+  flex-direction: column;
+}
+
+// ─── Page wrapper ─────────────────────────────────────────────────────────────
+.wave-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 32px 40px;
+}
+
+.wave-page__header {
+  margin-bottom: 32px;
+}
+
+.wave-page__title {
+  font-family: 'IBM Plex Sans', 'Helvetica Neue', sans-serif;
+  font-size: 20px;
+  font-weight: 400;
+  color: #f4f4f4;
+  letter-spacing: 0;
+  margin: 0 0 4px;
+}
+
+.wave-page__subtitle {
+  font-size: 13px;
+  color: var(--wave-text-muted);
+  margin: 0;
+}
+
+// ─── Empty state ─────────────────────────────────────────────────────────────
+.wave-empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 60px 0;
+}
+
+.wave-empty-state__icon {
+  color: #3d3d3d;
+  opacity: 0.9;
+}
+
+.wave-empty-state__waveform {
+  display: block;
+
+  rect {
+    transform-origin: center;
+    animation: wave-idle 2.4s ease-in-out infinite;
+    fill: #3d3d3d;
+  }
+
+  rect:nth-child(1)  { animation-delay: 0.00s; }
+  rect:nth-child(2)  { animation-delay: 0.10s; }
+  rect:nth-child(3)  { animation-delay: 0.20s; }
+  rect:nth-child(4)  { animation-delay: 0.30s; }
+  rect:nth-child(5)  { animation-delay: 0.15s; }
+  rect:nth-child(6)  { animation-delay: 0.25s; }
+  rect:nth-child(7)  { animation-delay: 0.05s; }
+  rect:nth-child(8)  { animation-delay: 0.35s; }
+  rect:nth-child(9)  { animation-delay: 0.18s; }
+  rect:nth-child(10) { animation-delay: 0.28s; }
+  rect:nth-child(11) { animation-delay: 0.08s; }
+  rect:nth-child(12) { animation-delay: 0.22s; }
+}
+
+@keyframes wave-idle {
+  0%, 100% { transform: scaleY(1); }
+  50%       { transform: scaleY(0.45); }
+}
+
+.wave-empty-state__heading {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 18px;
+  font-weight: 300;
+  color: var(--wave-text-tertiary);
+  margin: 0;
+  letter-spacing: 0.01em;
+}
+
+.wave-empty-state__body {
+  font-size: 13px;
+  color: var(--wave-text-muted);
+  margin: -8px 0 0;
+  text-align: center;
+  max-width: 280px;
+  line-height: 1.5;
+}
+
+// ─── Page header row ─────────────────────────────────────────────────────────
+.wave-page__header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+// ─── Project grid ─────────────────────────────────────────────────────────────
+.wave-project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+// ─── Project card ─────────────────────────────────────────────────────────────
+.wave-project-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 20px 14px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
+  outline: none;
+  overflow: hidden;
+
+  &:hover {
+    background: #1f1f1f;
+    border-color: #383838;
+  }
+
+  &:focus-visible {
+    box-shadow: inset 0 0 0 2px var(--wave-accent);
+  }
+
+  &--error {
+    border-color: rgba(250, 77, 86, 0.3);
+  }
+}
+
+.wave-project-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wave-project-card__top-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wave-project-card__delete-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--wave-text-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+
+  svg { fill: currentColor; }
+
+  &:hover {
+    color: #fa4d56;
+    background: rgba(250, 77, 86, 0.12);
+  }
+}
+
+// Show delete button on card hover
+.wave-project-card:hover .wave-project-card__delete-btn {
+  opacity: 1;
+}
+
+.wave-project-card__icon {
+  color: #3d3d3d;
+  svg { fill: currentColor; }
+}
+
+.wave-project-card__body {
+  flex: 1;
+}
+
+.wave-project-card__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--wave-text-primary);
+  margin: 0 0 4px;
+  line-height: 1.3;
+}
+
+.wave-project-card__status-icon {
+  flex-shrink: 0;
+
+  &--ok  { fill: var(--wave-accent); }
+  &--err { fill: #fa4d56; }
+}
+
+.wave-project-card__filename {
+  font-size: 12px;
+  color: var(--wave-text-muted);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+.wave-project-card__duration {
+  color: var(--wave-text-faint);
+}
+
+.wave-project-card__error-msg {
+  font-size: 11px;
+  color: #ff8389;
+  margin: 6px 0 0;
+  line-height: 1.4;
+}
+
+// Import progress bar (sits at bottom of card)
+.wave-project-card__import-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #2a2a2a;
+}
+
+.wave-project-card__import-fill {
+  height: 100%;
+  background: var(--wave-accent);
+  transition: width 300ms ease;
+
+  &--transcribing {
+    background: #3ddbd9; // teal for transcription
+  }
+}
+
+.wave-project-card__import-pct {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--wave-accent);
+  align-self: flex-end;
+}
+
+.wave-project-card__footer {
+  padding-top: 6px;
+  border-top: 1px solid #222;
+}
+
+.wave-project-card__date {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--wave-text-faint);
+}
+
+// ─── Project status badges ────────────────────────────────────────────────────
+.wave-project-badge {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 2px;
+  white-space: nowrap;
+
+  &--dim   { background: rgba(255,255,255,0.05); color: #6f6f6f; border: 1px solid #2e2e2e; }
+  &--blue  { background: rgba(69,137,255,0.12);  color: #78a9ff; border: 1px solid rgba(69,137,255,0.25); }
+  &--amber { background: rgba(232,160,32,0.12);  color: var(--wave-accent); border: 1px solid rgba(232,160,32,0.3); }
+  &--green { background: rgba(66,190,101,0.12);  color: #42be65; border: 1px solid rgba(66,190,101,0.25); }
+  &--red   { background: rgba(250,77,86,0.12);   color: #ff8389; border: 1px solid rgba(250,77,86,0.25); }
+}
+
+// ─── New project form ─────────────────────────────────────────────────────────
+.wave-new-project-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-bottom: 8px;
+}
+
+.wave-file-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wave-file-picker__label {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--wave-text-secondary);
+  letter-spacing: 0.32px;
+}
+
+.wave-file-picker__row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.wave-file-picker__display {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #262626;
+  border: 1px solid #393939;
+  border-radius: 0;
+  font-size: 13px;
+  color: var(--wave-text-faint);
+  min-width: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  overflow: hidden;
+
+  svg { fill: currentColor; flex-shrink: 0; }
+
+  span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &--selected {
+    color: var(--wave-text-secondary);
+    border-color: #525252;
+  }
+}
+
+.wave-file-picker__placeholder {
+  color: var(--wave-text-faint);
+}
+
+.wave-file-picker__hint {
+  font-size: 11px;
+  color: var(--wave-text-faint);
+  margin: 0;
+}
+
+// ─── No-model banner ─────────────────────────────────────────────────────────
+.wave-no-model-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 24px;
+  background: rgba(243, 164, 10, 0.08);
+  border: 1px solid rgba(243, 164, 10, 0.25);
+  border-radius: 2px;
+
+  svg { fill: #f1c21b; flex-shrink: 0; }
+
+  .cds--btn--ghost {
+    margin-left: auto;
+    white-space: nowrap;
+  }
+}
+
+.wave-no-model-banner__text {
+  font-size: 13px;
+  color: #c6c6c6;
+  line-height: 1.4;
+  flex: 1;
+
+  strong { color: #f4f4f4; }
+}
+
+// ─── Model grid ──────────────────────────────────────────────────────────────
+.wave-model-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+
+// ─── Model card ──────────────────────────────────────────────────────────────
+.wave-model-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 2px;
+  transition: border-color 120ms ease;
+
+  &--ready {
+    border-color: rgba(232, 160, 32, 0.25);
+  }
+
+  &--error {
+    border-color: rgba(250, 77, 86, 0.35);
+  }
+
+  &--selected {
+    border-color: var(--wave-accent);
+    background: #1f1c14;
+  }
+}
+
+.wave-model-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wave-model-card__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wave-model-card__name {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 14px;
+  font-weight: 600;
+  color: #f4f4f4;
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+.wave-model-card__size {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  color: var(--wave-text-tertiary);
+  white-space: nowrap;
+}
+
+// ─── Badges ──────────────────────────────────────────────────────────────────
+.wave-model-card__badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.wave-badge {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 2px;
+
+  &--amber {
+    background: rgba(232, 160, 32, 0.15);
+    color: var(--wave-accent);
+    border: 1px solid rgba(232, 160, 32, 0.3);
+  }
+
+  &--teal {
+    background: rgba(0, 179, 179, 0.12);
+    color: #3ddbd9;
+    border: 1px solid rgba(0, 179, 179, 0.25);
+  }
+
+  &--dim {
+    background: rgba(255, 255, 255, 0.05);
+    color: #6f6f6f;
+    border: 1px solid #2e2e2e;
+  }
+}
+
+// ─── Card body ───────────────────────────────────────────────────────────────
+.wave-model-card__desc {
+  font-size: 13px;
+  color: var(--wave-text-secondary);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.wave-model-card__best-for {
+  font-size: 12px;
+  color: var(--wave-text-tertiary);
+
+  .wave-model-card__label {
+    margin-right: 6px;
+  }
+}
+
+.wave-model-card__label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--wave-text-muted);
+  margin-right: 8px;
+}
+
+// ─── Score dots ──────────────────────────────────────────────────────────────
+.wave-model-card__scores {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 0;
+  border-top: 1px solid #222;
+  border-bottom: 1px solid #222;
+}
+
+// Grid: [label 72px] [dots auto] [speed-text 1fr]
+// "ACCURACY" is the longest label at ~64px — 72px gives comfortable clearance
+// so dots on every card start at the same X position regardless of label length.
+.wave-model-card__score-row {
+  display: grid;
+  grid-template-columns: 72px auto 1fr;
+  align-items: center;
+
+  // label column already has its own styles via .wave-model-card__label
+  .wave-model-card__label {
+    margin-right: 0; // gap handled by grid
+  }
+}
+
+.wave-model-card__score-label {
+  font-size: 11px;
+  color: var(--wave-text-tertiary);
+  margin-left: 8px;
+}
+
+.wave-score-dots {
+  display: flex;
+  gap: 4px;
+}
+
+.wave-score-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid #333;
+  background: transparent;
+
+  &--filled {
+    border-color: transparent;
+  }
+
+  &--amber#{&}--filled  { background: var(--wave-accent); }
+  &--teal#{&}--filled   { background: #3ddbd9; }
+}
+
+.wave-model-card__reqs {
+  font-size: 11px;
+  color: var(--wave-text-muted);
+  margin: 0;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+// ─── Error banner ─────────────────────────────────────────────────────────────
+.wave-model-card__error-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(250, 77, 86, 0.08);
+  border: 1px solid rgba(250, 77, 86, 0.25);
+  border-radius: 2px;
+  font-size: 12px;
+  color: #ff8389;
+  line-height: 1.4;
+
+  svg {
+    flex-shrink: 0;
+    fill: #fa4d56;
+    margin-top: 1px;
+  }
+}
+
+// ─── Download progress ───────────────────────────────────────────────────────
+.wave-model-card__progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wave-model-card__progress-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-family: 'IBM Plex Mono', monospace;
+  color: #6f6f6f;
+}
+
+.wave-model-card__progress-right {
+  display: flex;
+  gap: 10px;
+}
+
+.wave-model-card__speed { color: #8d8d8d; }
+.wave-model-card__eta   { color: #525252; }
+
+.wave-model-card__resuming-note {
+  font-size: 11px;
+  color: var(--wave-accent);
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+// Override Carbon's ProgressBar fill colour to use our amber
+.wave-progress-bar .cds--progress-bar__bar {
+  background: var(--wave-accent);
+}
+
+// ─── Card footer ─────────────────────────────────────────────────────────────
+.wave-model-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+// Selected badge (top of card when model is active)
+.wave-model-card__selected-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  background: rgba(232, 160, 32, 0.12);
+  border: 1px solid rgba(232, 160, 32, 0.35);
+  border-radius: 2px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: 'IBM Plex Mono', monospace;
+  color: var(--wave-accent);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+
+  svg { fill: var(--wave-accent); }
+}
+
+// Ready row (ready label + "Use for transcription" side by side)
+.wave-model-card__ready-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
+
+.wave-model-card__ready-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--wave-accent);
+
+  svg { fill: var(--wave-accent); }
+}
+
+// "Use for transcription" ghost button
+.wave-btn-select-model.cds--btn--ghost {
+  color: var(--wave-text-tertiary);
+  font-size: 12px;
+  padding: 2px 8px;
+  min-height: unset;
+  height: 24px;
+
+  &:hover { color: var(--wave-accent); background: rgba(232, 160, 32, 0.08); }
+}
+
+.wave-model-card__partial-note {
+  font-size: 11px;
+  color: #525252;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+// ─── Danger ghost button ──────────────────────────────────────────────────────
+.wave-btn-danger-ghost.cds--btn--ghost {
+  color: #fa4d56;
+
+  svg { fill: #fa4d56; }
+
+  &:hover {
+    background: rgba(250, 77, 86, 0.1);
+    color: #ff8389;
+  }
+}
+
+// ─── Carbon button accent override ───────────────────────────────────────────
+.wave-btn-accent.cds--btn--primary {
+  background: var(--wave-accent);
+  color: #000;
+
+  &:hover {
+    background: var(--wave-accent-hover);
+  }
+
+  &:focus {
+    box-shadow: inset 0 0 0 1px var(--wave-accent-hover), inset 0 0 0 2px #161616;
+  }
+
+  &:active {
+    background: var(--wave-accent);
+  }
+}
+
+// ─── Settings page ───────────────────────────────────────────────────────────
+.wave-settings-section {
+  margin-bottom: 32px;
+}
+
+
+.wave-settings-section__header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #262626;
+}
+
+.wave-settings-section__title {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--wave-accent);
+  margin: 0;
+}
+
+.wave-settings-section__desc {
+  font-size: 13px;
+  color: var(--wave-text-muted);
+  margin: 0;
+}
+
+.wave-settings-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  border: 1px dashed #2e2e2e;
+  border-radius: 2px;
+  color: var(--wave-text-tertiary);
+  font-size: 13px;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Editor page ──────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+.wave-editor {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #161616;
+  overflow: hidden;
+}
+
+// ─── Top bar ──────────────────────────────────────────────────────────────────
+
+.wave-editor-topbar {
+  height: 48px;
+  flex-shrink: 0;
+  position: relative; // anchor for the absolutely-centered toggle
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  background: #0f0f0f;
+  border-bottom: 1px solid #262626;
+}
+
+.wave-editor-topbar__back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--wave-text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 120ms ease, color 120ms ease;
+
+  svg { fill: currentColor; }
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--wave-text-primary);
+  }
+}
+
+.wave-editor-topbar__divider {
+  width: 1px;
+  height: 20px;
+  background: #2e2e2e;
+  flex-shrink: 0;
+}
+
+.wave-editor-topbar__title {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--wave-text-primary);
+  cursor: default;
+  user-select: none;
+
+  &:hover {
+    color: var(--wave-text-secondary);
+  }
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+// Inline rename input — replaces the title in-place when double-clicked.
+.wave-editor-topbar__rename-input {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--wave-text-primary);
+  background: #1a1a1a;
+  border: 1px solid var(--wave-accent);
+  border-radius: 3px;
+  padding: 2px 6px;
+  outline: none;
+  flex: 1;
+  min-width: 0;
+  max-width: 280px;
+}
+
+.wave-editor-topbar__status {
+  flex-shrink: 0;
+}
+
+// ─── Body (editor + inspector) ────────────────────────────────────────────────
+
+.wave-editor-body {
+  flex: 1;
+  display: flex;
+  min-height: 0; // allow flex children to scroll independently
+}
+
+// ─── Transcript scroll area ───────────────────────────────────────────────────
+
+.wave-editor-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 40px 56px;
+  scroll-behavior: smooth;
+}
+
+// TipTap ProseMirror root
+.wave-transcript-editor .ProseMirror {
+  outline: none;
+  font-family: 'IBM Plex Sans', 'Helvetica Neue', sans-serif;
+  font-size: 16px;
+  line-height: 2;
+  color: var(--wave-text-primary);
+  max-width: 680px;
+
+  p {
+    margin: 0 0 1.5em;
+
+    &:last-child { margin-bottom: 0; }
+  }
+}
+
+// ─── Word nodes ───────────────────────────────────────────────────────────────
+
+.wave-word {
+  cursor: pointer;
+  border-radius: 2px;
+  padding: 2px 0;
+  transition: background 80ms ease;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.09);
+  }
+
+  // Medium confidence (60–80%)
+  &--mid { color: #a8a8a8; }
+
+  // Low confidence (<60%) — amber warning
+  &--low { color: var(--wave-accent); }
+
+  // Deleted word (Phase 7: text-based audio editing)
+  &--deleted {
+    text-decoration: line-through;
+    opacity: 0.35;
+    cursor: default;
+  }
+}
+
+// ─── Loading / empty states inside editor ────────────────────────────────────
+
+.wave-editor-loading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--wave-text-muted);
+}
+
+.wave-editor-loading__hint {
+  font-size: 14px;
+  color: var(--wave-text-tertiary);
+  text-align: center;
+  max-width: 340px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.wave-editor-loading__error {
+  font-size: 13px;
+  color: #ff8389;
+  max-width: 340px;
+  text-align: center;
+  margin: 0;
+}
+
+// ─── Inspector panel ──────────────────────────────────────────────────────────
+
+.wave-inspector {
+  width: 260px;
+  flex-shrink: 0;
+  border-left: 1px solid #262626;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #111;
+}
+
+// Tab bar
+.wave-inspector-tabs {
+  display: flex;
+  border-bottom: 1px solid #262626;
+  flex-shrink: 0;
+}
+
+.wave-inspector-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 8px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--wave-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+
+  svg { fill: currentColor; flex-shrink: 0; }
+
+  &:hover { color: var(--wave-text-secondary); }
+
+  &--active {
+    color: var(--wave-accent);
+    border-bottom-color: var(--wave-accent);
+
+    svg { fill: var(--wave-accent); }
+  }
+}
+
+// Tab content wrapper
+.wave-inspector-tab-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+// Section
+.wave-inspector-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  &--disabled { opacity: 0.5; }
+}
+
+.wave-inspector-section__title {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--wave-text-muted);
+  margin: 0 0 4px;
+}
+
+.wave-inspector-section__note {
+  font-size: 11px;
+  color: var(--wave-text-faint);
+  margin: 2px 0 0;
+  line-height: 1.4;
+
+  &--error { color: #ff8389; }
+}
+
+// Export list
+.wave-inspector-export-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wave-inspector-export-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 2px;
+  transition: background 100ms ease;
+
+  &:hover { background: rgba(255, 255, 255, 0.04); }
+
+  &--dim { opacity: 0.5; }
+}
+
+.wave-inspector-export-row__info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.wave-inspector-export-row__label {
+  font-size: 13px;
+  color: var(--wave-text-secondary);
+  white-space: nowrap;
+}
+
+.wave-inspector-export-row__desc {
+  font-size: 11px;
+  color: var(--wave-text-faint);
+}
+
+.wave-inspector-export-btn.cds--btn--ghost {
+  padding: 4px 8px;
+  min-height: unset;
+  height: 28px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--wave-text-tertiary);
+  white-space: nowrap;
+
+  svg { fill: currentColor; }
+
+  &:hover:not(:disabled) {
+    background: rgba(232, 160, 32, 0.08);
+    color: var(--wave-accent);
+  }
+}
+
+// Details tab
+.wave-inspector-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+}
+
+.wave-inspector-details__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid #1e1e1e;
+
+  &:last-child { border-bottom: none; }
+
+  dt {
+    font-size: 12px;
+    color: var(--wave-text-muted);
+  }
+
+  dd {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--wave-text-secondary);
+    margin: 0;
+  }
+}
+
+// Confidence legend
+.wave-inspector-conf-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+  font-size: 13px;
+}
+
+// Empty state inside inspector
+.wave-inspector-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--wave-text-faint);
+  font-size: 13px;
+
+  svg { fill: currentColor; opacity: 0.4; }
+}
+
+// ─── Timeline strip ───────────────────────────────────────────────────────────
+
+.wave-timeline {
+  flex-shrink: 0;
+  // border-top replaced by .wave-resize-handle which acts as the draggable border
+  background: #0d0d0d;
+  display: flex;
+  flex-direction: column;
+  // height is set via inline style from panelHeight state
+  overflow: hidden;
+}
+
+// ─── Resize handle ────────────────────────────────────────────────────────────
+// Sits at the top of .wave-timeline; dragging it up/down resizes the panel.
+
+.wave-resize-handle {
+  width: 100%;
+  height: 6px;
+  flex-shrink: 0;
+  cursor: ns-resize;
+  background: #1a1a1a;
+  border-top: 1px solid #262626;
+  position: relative;
+  z-index: 10;
+  transition: background 120ms ease;
+
+  // Subtle grip indicator in the center
+  &::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 28px;
+    height: 2px;
+    background: #333;
+    border-radius: 1px;
+    transition: background 120ms ease, width 120ms ease;
+  }
+
+  &:hover,
+  &:active {
+    background: rgba(232, 160, 32, 0.08);
+
+    &::after {
+      background: var(--wave-accent);
+      width: 40px;
+    }
+  }
+}
+
+.wave-waveform-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  height: 28px;
+  flex-shrink: 0;
+  border-bottom: 1px solid #1a1a1a;
+  background: #080808;
+}
+
+.wave-tool-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 20px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--wave-text-muted);
+  cursor: pointer;
+  transition: background 80ms, color 80ms;
+
+  &:hover:not(&--disabled) {
+    background: #252525;
+    color: var(--wave-text-secondary);
+  }
+
+  &--active {
+    background: var(--wave-accent-subtle);
+    color: var(--wave-accent);
+  }
+
+  &--disabled {
+    opacity: 0.28;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+}
+
+.wave-tool-divider {
+  width: 1px;
+  height: 14px;
+  background: #2a2a2a;
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+// ─── Time ruler ───────────────────────────────────────────────────────────────
+
+.wave-ruler {
+  position: relative;
+  width: 100%;
+  height: 20px;
+  flex-shrink: 0;
+  background: #0a0a0a;
+  border-bottom: 1px solid #1a1a1a;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+// Inner div stretches to the full zoomed canvas width and slides with scroll
+.wave-ruler__inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  // width set inline; transform: translateX(-scrollLeft) set inline
+}
+
+.wave-ruler__tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+
+  &::before {
+    content: '';
+    display: block;
+    width: 1px;
+    height: 5px;
+    background: #383838;
+  }
+}
+
+.wave-ruler__label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  color: #555;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.wave-ruler__playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--wave-accent);
+  opacity: 0.7;
+  transform: translateX(-50%);
+}
+
+// ─── Zoom toolbar elements ────────────────────────────────────────────────────
+
+.wave-zoom-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: var(--wave-accent);
+  padding: 0 2px;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.wave-tool-btn--text {
+  width: auto;
+  padding: 0 4px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+}
+
+// ─── Word track ───────────────────────────────────────────────────────────────
+// Strip between the time ruler and the waveform canvas. Each word gets a
+// positioned chip; silence sentinels and inter-word gaps get their own chips.
+
+.wave-word-track {
+  position: relative;
+  width: 100%;
+  height: 26px;
+  flex-shrink: 0;
+  background: #060606;
+  border-bottom: 1px solid #1a1a1a;
+  overflow: hidden;
+  // Allow pointer events so word chips are clickable.
+  cursor: default;
+}
+
+// Inner div expands to full zoomed width and slides with scroll — same pattern
+// as wave-ruler__inner.
+.wave-word-track__inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  // width and transform set inline
+}
+
+// ── Word chips ────────────────────────────────────────────────────────────────
+
+.wave-word-chip {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  padding: 0 4px;
+  border-radius: 3px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: 'IBM Plex Mono', 'Courier New', monospace;
+  font-size: 10px;
+  line-height: 20px;     // vertically centered within the 20px height (26-3-3)
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.05);
+  color: #6a6a6a;
+  user-select: none;
+  transition: background 60ms, color 60ms, border-color 60ms;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.10);
+    color: #a0a0a0;
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  // Silence sentinels: wider, darker, italic duration label
+  &--silence {
+    background: rgba(255, 255, 255, 0.02);
+    border-color: rgba(255, 255, 255, 0.04);
+    color: #3a3a3a;
+    font-style: italic;
+    cursor: pointer;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: #5a5a5a;
+    }
+  }
+
+  // Deleted words: red tint to mirror the waveform's red deleted regions
+  &--deleted {
+    background: rgba(255, 80, 80, 0.07);
+    border-color: rgba(255, 80, 80, 0.15);
+    color: rgba(255, 100, 100, 0.45);
+    text-decoration: line-through;
+    text-decoration-color: rgba(255, 80, 80, 0.3);
+
+    &:hover {
+      background: rgba(255, 80, 80, 0.12);
+    }
+  }
+
+  // Selected words: blue tint to mirror waveform selection region
+  &--selected {
+    background: rgba(100, 149, 237, 0.18);
+    border-color: rgba(100, 149, 237, 0.35);
+    color: #8aaeee;
+  }
+}
+
+// ── Gap duration badge ────────────────────────────────────────────────────────
+// Shown for inter-word gaps not already covered by a silence sentinel chip.
+
+.wave-gap-chip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  color: #333;
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+// ─── Word boundary marker layer ───────────────────────────────────────────────
+
+.wave-boundary-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;      // below overlay (z-index 2) so it doesn't block interaction
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.wave-boundary-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  // calc(X% - scrollLeftPx) set inline
+  background: rgba(100, 149, 237, 0.25);
+  transform: translateX(-50%);
+
+  // Small dot at the top to visually anchor the marker
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -1px;
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: rgba(100, 149, 237, 0.5);
+  }
+}
+
+.wave-waveform-wrapper {
+  position: relative;
+  width: 100%;
+  // flex: 1 so the waveform canvas grows to fill all space not taken by the
+  // toolbar, ruler, word-track, and playback controls.
+  flex: 1;
+  min-height: 60px;
+  border-bottom: 1px solid #1e1e1e;
+}
+
+.wave-waveform-canvas {
+  width: 100%;
+  // Fill the wrapper entirely; WaveSurfer uses height:'auto' to match this.
+  height: 100%;
+  overflow: hidden;
+
+  &[data-loading] {
+    opacity: 0.4;
+  }
+}
+
+.wave-waveform-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  user-select: none;
+
+  &--cursor {
+    cursor: default;
+
+    &:active {
+      cursor: col-resize;
+    }
+  }
+
+  &--blade {
+    cursor: crosshair;
+  }
+}
+
+.wave-timeline-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px;
+  height: 52px;
+  flex-shrink: 0;
+}
+
+// ─── Playback controls ────────────────────────────────────────────────────────
+
+.wave-playback {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.wave-playback__seek-btn {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid #2e2e2e;
+  border-radius: 2px;
+  color: var(--wave-text-muted);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color 100ms ease, color 100ms ease;
+
+  &:hover {
+    border-color: #4a4a4a;
+    color: var(--wave-text-secondary);
+  }
+}
+
+.wave-playback__play-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background: var(--wave-accent);
+  border: none;
+  border-radius: 50%;
+  color: #000;
+  cursor: pointer;
+  transition: background 120ms ease, transform 80ms ease;
+  flex-shrink: 0;
+
+  &:hover  { background: var(--wave-accent-hover); }
+  &:active { transform: scale(0.94); }
+
+  svg { display: block; }
+}
+
+.wave-playback__time {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  min-width: 96px;
+  user-select: none;
+}
+
+.wave-playback__current { color: var(--wave-text-secondary); }
+.wave-playback__sep     { color: var(--wave-text-faint); }
+.wave-playback__total   { color: var(--wave-text-faint); }
+
+.wave-playback__speeds {
+  display: flex;
+  gap: 2px;
+  border: 1px solid #2e2e2e;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.wave-playback__speed-btn {
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  color: var(--wave-text-muted);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease;
+
+  &:hover { background: rgba(255,255,255,0.05); color: var(--wave-text-secondary); }
+
+  &--active {
+    background: var(--wave-accent-subtle);
+    color: var(--wave-accent);
+  }
+}
+
+// ─── Word highlights (active playback + selection) ────────────────────────────
+
+.wave-word--active {
+  background: rgba(232, 160, 32, 0.18) !important;
+  border-radius: 2px;
+  color: var(--wave-text-primary) !important;
+}
+
+.wave-word--selected {
+  background: rgba(100, 149, 237, 0.22) !important;
+  border-radius: 2px;
+  outline: 1px solid rgba(100, 149, 237, 0.35);
+}
+
+.wave-word--deleted {
+  text-decoration: line-through;
+  opacity: 0.4;
+  color: #ff8389 !important;
+  background: rgba(255, 131, 137, 0.08) !important;
+}
+
+// Silence sentinel (█ block representing ≥ 3 s of silence between words)
+.wave-word--silence {
+  display:       inline-block;
+  font-family:   'IBM Plex Mono', monospace;
+  font-size:     0.75em;
+  letter-spacing: 0.05em;
+  color:         #444;
+  background:    transparent;
+  cursor:        pointer;
+  border-radius: 2px;
+  padding:       0 2px;
+  vertical-align: middle;
+  transition:    background 80ms, color 80ms;
+
+  &:hover {
+    color:      #666;
+    background: rgba(255,255,255,0.04);
+  }
+}
+
+// Segment-view silence cue: no timestamp, just the █ block centered
+.wave-segment--silence {
+  justify-content: center;
+
+  .wave-segment__text {
+    text-align: center;
+  }
+}
+
+// ─── Edits list ───────────────────────────────────────────────────────────────
+
+.wave-inspector-empty--inline {
+  padding: 32px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--wave-text-tertiary);
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.wave-inspector-empty__hint {
+  margin: 0;
+  color: var(--wave-text-muted);
+  font-size: 12px;
+}
+
+.wave-edits-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wave-edit-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #1e1e1e;
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.wave-edit-item__label {
+  font-size: 11px;
+  color: var(--wave-text-secondary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wave-edit-item__undo {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid #2e2e2e;
+  border-radius: 3px;
+  color: var(--wave-text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 80ms, color 80ms;
+
+  &:hover {
+    border-color: #ff8389;
+    color: #ff8389;
+  }
+}
+
+// ─── View mode toggle (top bar) ───────────────────────────────────────────────
+
+// Pushes any right-side icons to the far right (mirrors the left-side divider
+// gap so the absolutely-centred toggle appears truly centred).
+.wave-editor-topbar__spacer {
+  flex: 1;
+}
+
+// Absolutely centred so it sits at the exact midpoint of the topbar regardless
+// of how wide the left-side title is.
+.wave-view-toggle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  border: 1px solid #2e2e2e;
+  border-radius: 4px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.wave-view-btn {
+  padding: 5px 22px;
+  background: transparent;
+  border: none;
+  color: var(--wave-text-muted);
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease;
+
+  & + & {
+    border-left: 1px solid #2e2e2e;
+  }
+
+  &:hover { background: rgba(255,255,255,0.05); color: var(--wave-text-secondary); }
+
+  &--active {
+    background: var(--wave-accent-subtle);
+    color: var(--wave-accent);
+    font-weight: 500;
+  }
+}
+
+// ─── Segments view ────────────────────────────────────────────────────────────
+
+.wave-segments {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-width: 680px;
+}
+
+.wave-segment {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  gap: 0 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid #1e1e1e;
+
+  &:last-child { border-bottom: none; }
+}
+
+.wave-segment__ts {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--wave-text-faint);
+  padding-top: 3px; // align to cap-height of text
+  white-space: nowrap;
+  user-select: none;
+}
+
+.wave-segment__text {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 16px;
+  line-height: 1.8;
+  color: var(--wave-text-primary);
+}
+
+// ─── Keyboard shortcuts in inspector ─────────────────────────────────────────
+
+.wave-inspector-shortcuts {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+}
+
+.wave-inspector-shortcuts__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid #1a1a1a;
+
+  &:last-child { border-bottom: none; }
+
+  dt { margin: 0; }
+  dd { font-size: 12px; color: var(--wave-text-muted); margin: 0; }
+}
+
+.wave-kbd {
+  display: inline-flex;
+  align-items: center;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--wave-text-secondary);
+  background: #1e1e1e;
+  border: 1px solid #333;
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}

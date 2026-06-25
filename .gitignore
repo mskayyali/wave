@@ -1,0 +1,35 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Claude Code local (per-user) settings
+.claude/settings.local.json
+
+# ── Not part of Wave (cross-project artifacts) ──────────────────────────────
+# Next.js dev cache leaked in from a sibling project
+.next/
+# Obsidian vault config (this folder sits inside a vault)
+.obsidian/
+# Stray Go binary (the `micro` terminal editor) — not a Wave build artifact
+/micro
