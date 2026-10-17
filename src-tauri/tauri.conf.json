@@ -61,7 +61,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE3OTZGMzFGRDQyNUJFMTYKUldRV3ZpWFVIL09XcDFUcEg4eitLZDJ3YVhSeDVwOVVDYWc1MGJaQk52TWZLdnIrejNKZVplM3kK",
       "endpoints": [
         "https://github.com/mskayyali/wave/releases/latest/download/latest.json"
       ]
