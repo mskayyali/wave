@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Wave · Edit audio by editing text</title>
+<title>Wave: edit audio by editing text</title>
 <meta name="description" content="Wave is a text-based audio editor for podcasts, made for the Mac. Delete a word in the transcript and it's cut from the audio. Everything runs on your Mac.">
 <meta name="theme-color" content="#0c0c0c">
 <link rel="icon" type="image/svg+xml" href="wave.svg">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Wave · Edit audio by editing text">
+<meta property="og:title" content="Wave: edit audio by editing text">
 <meta property="og:description" content="A text-based audio editor for podcasts, made for the Mac. Transcription, clean-up and speaker detection all run on your Mac.">
 <meta property="og:url" content="https://mskayyali.github.io/wave/">
 <meta property="og:image" content="https://mskayyali.github.io/wave/og.png">
@@ -347,7 +347,7 @@ footer a:hover { color: var(--text); }
 <main>
   <section class="hero">
     <div class="wrap">
-      <p class="kicker mono rise" style="--i:0">For podcasts · On your Mac</p>
+      <p class="kicker mono rise" style="--i:0">A podcast editor for the Mac</p>
       <h1 class="rise" style="--i:1">Edit audio by editing <em>text</em>.</h1>
       <p class="lede rise" style="--i:2">Wave transcribes your recording on your Mac. Delete a word in the transcript and it's cut from the audio. Trim the “um”s, tighten the pauses, clean up the sound, and export.</p>
       <div class="cta rise" style="--i:3">
@@ -356,13 +356,13 @@ footer a:hover { color: var(--text); }
           Download for Mac
         </a>
         <a class="link-arrow" href="https://github.com/mskayyali/wave">Source on GitHub →</a>
-        <p class="meta mono">Version <span data-version>1.0.0</span> · Apple Silicon · macOS 13.4 or later · <span data-size>17 MB</span></p>
+        <p class="meta mono">Version <span data-version>1.0.0</span>, <span data-size>17 MB</span>. For Macs with Apple Silicon and macOS 13.4 or later.</p>
       </div>
 
       <figure class="stage rise" style="--i:4" aria-label="A demonstration: a long pause is shortened, the filler word “um” is cut, and the misheard “tax.” is corrected to “text.”, leaving: So, editing audio is just editing text.">
         <div class="stage-bar" aria-hidden="true">
           <div class="dots"><i></i><i></i><i></i></div>
-          <span class="file mono">Episode 12 · Transcript</span>
+          <span class="file mono">Episode 12</span>
           <span class="mono">Flow</span>
         </div>
         <div class="line" id="line" aria-hidden="true"></div>
@@ -478,7 +478,7 @@ footer a:hover { color: var(--text); }
 <footer>
   <div class="wrap">
     <div>
-      <p style="color:var(--text-2)">Wave · Built by <a href="https://mskayyali.com">Saleh Kayyali</a> (<a href="https://x.com/mskayyali">@mskayyali</a>)</p>
+      <p style="color:var(--text-2)">Wave is built by <a href="https://mskayyali.com">Saleh Kayyali</a> (<a href="https://x.com/mskayyali">@mskayyali</a>)</p>
       <p><a href="https://github.com/mskayyali/wave">Source on GitHub</a></p>
     </div>
     <div>
@@ -602,17 +602,17 @@ footer a:hover { color: var(--text); }
       say('Transcribed on your Mac');
       await wait(1600);
       pause.tok.classList.add('sel');
-      say('A long pause after “So,” · 1.8 s');
+      say('A long pause after “So,”, 1.8 seconds');
       await wait(1300);
       pause.short = true;
       setPause(PAUSE_SHORT, '0.4 s');
-      say('Shortened to a natural rhythm · 0.4 s');
+      say('Shortened to 0.4 seconds');
       clock.textContent = '0:02.8';
       await wait(1000);
       pause.tok.classList.remove('sel');
       const um = byKey('um');
       um.tok.classList.add('sel');
-      say('Select the filler · <kbd>⌫</kbd>');
+      say('Select the filler and press <kbd>⌫</kbd>');
       await wait(1300);
       um.tok.classList.remove('sel');
       um.tok.classList.add('cut');
@@ -623,7 +623,7 @@ footer a:hover { color: var(--text); }
       await wait(1100);
       const tax = byKey('tax');
       tax.tok.classList.add('sel');
-      say('Misheard? Correct it · <kbd>↩</kbd>');
+      say('Misheard? Select it and press <kbd>↩</kbd>');
       await wait(1300);
       tax.tok.classList.remove('sel');
       tax.word.textContent = 'text.';
