@@ -92,12 +92,35 @@ node -e '
   fs.writeFileSync(`${out}/latest.json`, JSON.stringify(manifest, null, 2) + "\n");
 ' "$VERSION" "$NOTES" "$UPDATE.sig" "$OUT" "$REPO"
 
+# The GitHub release page also tells first-time downloaders how to install,
+# which the in-app notes leave out.
+SHA=$(shasum -a 256 "$OUT/Wave_${VERSION}_aarch64.dmg" | cut -d' ' -f1)
+{
+  cat "$NOTES"
+  cat <<INSTALL
+
+### Install
+
+Wave runs on Macs with Apple Silicon (M1 or later) and macOS 13.4 or later.
+
+1. Open \`Wave_${VERSION}_aarch64.dmg\` and drag Wave to Applications.
+2. Wave isn't notarized by Apple yet, so the first time, macOS says it can't verify it. Click **Done**, then open **System Settings → Privacy & Security** and click **Open Anyway**. Or, in Terminal: \`xattr -dr com.apple.quarantine /Applications/Wave.app\`
+3. In Wave's Settings, download **Transcription** (1.6 GB).
+
+Already using Wave 1.1 or later? It offers this update by itself.
+
+MP3 export uses LAME 3.100, bundled as a separate library under the LGPL. Its source is at https://sourceforge.net/projects/lame/files/lame/3.100/
+
+SHA-256 of the DMG: \`$SHA\`
+INSTALL
+} > "$OUT/release-notes.md"
+
 # 4. Commit, tag, push, publish.
 git add package.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
 git commit -q -m "Wave $VERSION"
 git tag "v$VERSION"
 git push -q origin main "v$VERSION"
-gh release create "v$VERSION" --repo "$REPO" --title "Wave $VERSION" --notes-file "$NOTES" \
+gh release create "v$VERSION" --repo "$REPO" --title "Wave $VERSION" --notes-file "$OUT/release-notes.md" \
   "$OUT/Wave_${VERSION}_aarch64.dmg" "$OUT/Wave.app.tar.gz" "$OUT/Wave.app.tar.gz.sig" "$OUT/latest.json"
 
 echo "Published https://github.com/$REPO/releases/tag/v$VERSION"
