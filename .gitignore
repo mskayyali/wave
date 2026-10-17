@@ -13,8 +13,7 @@ dist-ssr
 *.local
 
 # Editor directories and files
-.vscode/*
-!.vscode/extensions.json
+.vscode/
 .idea
 .DS_Store
 *.suo
@@ -23,8 +22,12 @@ dist-ssr
 *.sln
 *.sw?
 
-# Claude Code local (per-user) settings
-.claude/settings.local.json
+# Local notes and assistant settings, kept out of the source
+.claude/
+CLAUDE.md
+PLAN.md
+STATEFUL.md
+state-map.json
 
 # ── Not part of Wave (cross-project artifacts) ──────────────────────────────
 # Next.js dev cache leaked in from a sibling project
