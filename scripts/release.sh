@@ -124,4 +124,4 @@ gh release create "v$VERSION" --repo "$REPO" --title "Wave $VERSION" --notes-fil
   "$OUT/Wave_${VERSION}_aarch64.dmg" "$OUT/Wave.app.tar.gz" "$OUT/Wave.app.tar.gz.sig" "$OUT/latest.json"
 
 echo "Published https://github.com/$REPO/releases/tag/v$VERSION"
-echo "Copies of Wave $CURRENT or later will offer the update the next time they check."
+echo "Installed copies of Wave (1.1 or later) offer it the next time they check."
