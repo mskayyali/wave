@@ -19,7 +19,7 @@ Nothing else: no account, no FFmpeg, no Python.
 ### Install
 
 1. Open the DMG and drag **Wave** into **Applications**.
-2. Open Wave. This build isn't signed by Apple yet, so macOS blocks the first launch. Open **System Settings → Privacy & Security**, scroll down to the message about Wave and click **Open Anyway**, then confirm. You only do this once.
+2. Open Wave. It isn't notarized by Apple yet, so the first time, macOS says it can't verify that Wave is free of malware. Click **Done**, open **System Settings → Privacy & Security**, scroll down to the message about Wave and click **Open Anyway**, then confirm. You only do this once.
 
    Or, in Terminal:
 

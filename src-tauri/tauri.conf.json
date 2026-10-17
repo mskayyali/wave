@@ -49,7 +49,9 @@
     },
     "macOS": {
       "minimumSystemVersion": "13.4",
-      "frameworks": ["vendor/lame/libmp3lame.0.dylib"]
+      "frameworks": ["vendor/lame/libmp3lame.0.dylib"],
+      "signingIdentity": "-",
+      "hardenedRuntime": false
     }
   }
 }
