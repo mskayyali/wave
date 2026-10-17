@@ -7,16 +7,21 @@
 //! on Undo, or ⌘Z in a text field, arrives here instead.
 
 use tauri::menu::{Menu, MenuEvent, MenuItem, MenuItemBuilder, SubmenuBuilder};
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime, Wry};
 
-pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
-    let item = |id: &str, text: &str, shortcut: &str| -> tauri::Result<MenuItem<R>> {
+pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
+    let item = |id: &str, text: &str, shortcut: &str| -> tauri::Result<MenuItem<Wry>> {
         MenuItemBuilder::with_id(id, text).accelerator(shortcut).build(app)
     };
     // About opens Wave's own panel (the welcome animation, what Wave does, who
-    // made it), not the system's plain box.
+    // made it), not the system's plain box. The updates item is renamed as an
+    // update moves along ("Update to Wave 1.1.0…", "Restart to Update"), by
+    // src/lib/updater.ts through update::set_update_menu_label.
+    let updates = MenuItemBuilder::with_id("check-updates", "Check for Updates…").build(app)?;
+    app.manage(crate::update::UpdateMenuItem(updates.clone()));
     let wave = SubmenuBuilder::new(app, "Wave")
         .item(&MenuItemBuilder::with_id("about", "About Wave").build(app)?)
+        .item(&updates)
         .separator()
         .item(&item("settings", "Settings…", "CmdOrCtrl+,")?)
         .separator()

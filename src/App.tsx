@@ -7,6 +7,8 @@ import { listenForMenu, onCommand, typing } from './lib/commands';
 import { NavigationContext, type Navigation } from './lib/navigation';
 import { AppShell } from './components/layout/AppShell';
 import { AboutWave } from './components/layout/AboutWave';
+import { UpdateDialog } from './components/update/UpdateDialog';
+import { updater } from './lib/updater';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { EditorPage } from './pages/EditorPage';
@@ -61,6 +63,9 @@ function App() {
     } catch { /* not running in Tauri (a browser preview) */ }
   }, []);
 
+  // Updates: checked quietly from here on (lib/updater.ts).
+  useEffect(() => { void updater.start(); }, []);
+
   // Full screen hides the window buttons, so the space kept for them goes too.
   useEffect(() => {
     let win: ReturnType<typeof getCurrentWindow>;
@@ -79,6 +84,7 @@ function App() {
     const off = [
       listenForMenu(),
       onCommand('about', () => setAboutOpen(true)),
+      onCommand('check-updates', () => updater.fromMenu()),
       onCommand('settings', () => { setOpenProject(null); setActivePage('settings'); }),
       onCommand('new-project', () => {
         setOpenProject(null);
@@ -275,6 +281,7 @@ function App() {
           </AppShell>
         )}
         <AboutWave open={aboutOpen} onClose={() => setAboutOpen(false)} />
+        <UpdateDialog />
         {dragging && <DropOverlay audio={dragging.audio} other={dragging.other} />}
       </Theme>
     </NavigationContext.Provider>

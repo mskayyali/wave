@@ -20,6 +20,7 @@ export function jobKind(id: string): JobKind {
     case 'import':     return 'import';
     case 'transcribe': return 'transcribe';
     case 'download':   return 'download';
+    case 'update':     return 'download';
     case 'speakers':   return 'speakers';
     case 'enhance':    return 'enhance';
     case 'realign':    return 'realign';

@@ -42,6 +42,9 @@ libloading = "0.8"
 uuid = { version = "1", features = ["v4"] }
 whisper-rs = { version = "0.16", features = ["metal"] }
 ort = "=2.0.0-rc.13"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+libc = "0.2"
 
 # `tauri dev` builds are optimised, so audio and model code runs near release
 # speed: unoptimised, importing a 43-minute MP3 took minutes (symphonia, and
@@ -54,3 +57,9 @@ opt-level = 3
 [profile.dev]
 opt-level = 1
 
+# Proc macros and build scripts aren't stripped in release builds. Stripped,
+# this macOS refuses to load the proc-macro dylibs ("mis-aligned LINKEDIT string
+# pool"), so the build fails with "can't find crate for tauri_macros". They
+# only run while compiling; the app itself is stripped as usual.
+[profile.release.build-override]
+strip = false

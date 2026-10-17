@@ -1,5 +1,5 @@
 import { FolderOpen, Settings } from '@carbon/icons-react';
-import { APP_VERSION } from '../../lib/appInfo';
+import { UpdateCue } from '../update/UpdateCue';
 import { ActivityStatus } from './ActivityStatus';
 
 type Page = 'projects' | 'settings';
@@ -53,7 +53,7 @@ function Sidebar({ activePage, onNavigate, onAbout }: SidebarProps) {
       <ActivityStatus placement="sidebar" />
       <div className="wave-sidebar__footer">
         <button type="button" className="wave-sidebar__about" onClick={onAbout}>About</button>
-        <span className="wave-sidebar__version">v{APP_VERSION}</span>
+        <UpdateCue placement="sidebar" />
       </div>
     </aside>
   );

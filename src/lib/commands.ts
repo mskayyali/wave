@@ -6,7 +6,7 @@ import { listen } from '@tauri-apps/api/event';
 // false passes the command on (the editor takes Find; the shell takes the rest).
 
 export type Command =
-  | 'about' | 'new-project' | 'settings' | 'back' | 'shortcuts'
+  | 'about' | 'check-updates' | 'new-project' | 'settings' | 'back' | 'shortcuts'
   | 'undo' | 'redo' | 'find' | 'find-next' | 'find-previous'
   | 'view-flow' | 'view-segments';
 

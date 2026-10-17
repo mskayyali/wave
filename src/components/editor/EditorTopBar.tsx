@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Project } from '../../hooks/useProjects';
 import type { ViewMode } from '../../pages/EditorPage';
 import { ActivityStatus } from '../layout/ActivityStatus';
+import { UpdateCue } from '../update/UpdateCue';
 
 interface EditorTopBarProps {
   project:          Project;
@@ -104,6 +105,7 @@ export function EditorTopBar({ project, viewMode, onViewModeChange, onBack, onRe
       <div className="wave-editor-topbar__spacer" data-tauri-drag-region />
 
       <ActivityStatus placement="toolbar" />
+      <UpdateCue placement="toolbar" />
 
       <IconButton kind="ghost" size="sm" label="Keyboard shortcuts (?)" align="bottom-end" onClick={onShowShortcuts}>
         <Keyboard />

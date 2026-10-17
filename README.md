@@ -31,6 +31,10 @@ Nothing else: no account, no FFmpeg, no Python.
    - **DPDFNet** (14 MB): removes background noise and room echo.
    - **Speaker detection** (115 MB): finds who speaks when.
 
+### Updates
+
+From version 1.1, Wave updates itself. It checks quietly in the background, and when there's a new version, a small dot appears beside the version in the sidebar (and in the editor's top bar). Click it to see what's new, then choose **Update and restart** or **Later**. Wave never installs or restarts without asking, and if a transcription or export is running, it waits for it to finish. You can also use **Wave → Check for Updates…**, or turn automatic checks off in **Settings → Updates**.
+
 ## Quick start
 
 1. Click **New project** (⌘N) and choose a recording, or drop audio files anywhere on the window. MP3, WAV, M4A, FLAC and more work.
@@ -133,6 +137,24 @@ bunx tauri build    # build Wave.app and the DMG
 
 MP3 export uses LAME, which is prebuilt in `src-tauri/vendor/lame/`. To rebuild it, run `build.sh` in that folder.
 
+### Publishing a release
+
+Releases are signed, so installed copies of Wave only accept updates that really come from you.
+
+1. Once, make the updater's key. It asks for a password. Keep both safe, and never commit them:
+
+   ```bash
+   bunx tauri signer generate -w ~/.tauri/wave-updater.key
+   ```
+
+2. Write what's new in a Markdown file, then publish:
+
+   ```bash
+   scripts/release.sh 1.1.0 notes.md
+   ```
+
+The script bumps the version, builds Wave and its signed update, and publishes a GitHub release with the DMG, the update and `latest.json`, which installed copies read. The first time, it also adds the key's public half to `src-tauri/tauri.conf.json`. If the key is ever lost, installed copies can't update any more, and everyone has to download the next version by hand once.
+
 ### How it's put together
 
 Wave is a [Tauri 2](https://tauri.app/) app. The interface is React and TypeScript with IBM's Carbon design system (`src/`), and the audio work is in Rust (`src-tauri/src/`):
@@ -148,6 +170,7 @@ Wave is a [Tauri 2](https://tauri.app/) app. The interface is React and TypeScri
 | `waveform.rs` | The waveform the editor draws |
 | `agent.rs`, `mcp.rs` | The MCP server for AI agents |
 | `models.rs` | Model downloads |
+| `update.rs` | Updates: whether this copy can update itself, and the menu item that follows an update (the updater plugin downloads and installs) |
 
 Everything is stored in `~/Library/Application Support/com.mskayyali.wave/`: the models in `models/`, and each project in `projects/`. Edits are kept as a list and only applied to the audio at export, so the original is never changed.
 

@@ -175,6 +175,89 @@ body {
   letter-spacing: 0.04em;
 }
 
+// ─── Updates ──────────────────────────────────────────────────────────────────
+// The quiet marks (components/update/UpdateCue): the footer's version becomes a
+// button with an amber dot, and the editor's top bar gets a dotted button.
+
+.wave-update-cue {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-inline-end: -4px;
+  padding: 4px;
+  border: none;
+  border-radius: 2px;
+  background: none;
+  color: theme.$text-secondary;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: color 120ms ease;
+
+  &::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--wave-accent);
+  }
+  &:hover { color: theme.$text-primary; }
+  &:focus-visible { outline: 2px solid theme.$focus; outline-offset: -2px; }
+}
+
+.wave-update-cue--toolbar {
+  position: relative;
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 7px;
+    right: 7px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--wave-accent);
+    box-shadow: 0 0 0 2px theme.$background;
+    pointer-events: none;
+  }
+}
+
+.wave-update__body {
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-05;
+
+  p { @include type.type-style('body-01'); margin: 0; }
+  .cds--btn { align-self: flex-start; }
+}
+
+// What's new, from the release notes.
+.wave-update__notes {
+  max-height: 14rem;
+  overflow-y: auto;
+  padding: spacing.$spacing-04 spacing.$spacing-05;
+  background: theme.$layer-01;
+  border-left: 2px solid var(--wave-accent);
+
+  p, li { @include type.type-style('body-compact-01'); color: theme.$text-secondary; }
+  p + p, p + ul, ul + p { margin-top: spacing.$spacing-03; }
+  ul { margin: 0; padding-inline-start: spacing.$spacing-05; list-style: disc; }
+  li + li { margin-top: spacing.$spacing-02; }
+}
+
+.wave-update__body p.wave-update__aside {
+  @include type.type-style('helper-text-01');
+  color: theme.$text-helper;
+}
+
+.wave-update__auto { margin-top: spacing.$spacing-05; }
+
+// Carbon floats a row's action over it, and this one (a state and a labelled
+// button) is wider than a model row's, so the text keeps clear of it.
+.wave-update-row .wave-model-row__body { padding-inline-end: 20rem; }
+.wave-update-row--bare .wave-model-row__body { padding-inline-end: spacing.$spacing-05; }
+
 // ─── Progress ─────────────────────────────────────────────────────────────────
 // Progress reads in the accent everywhere, like the playhead: Carbon's bars
 // (they fill with --cds-interactive), the activity ring and the project cards.

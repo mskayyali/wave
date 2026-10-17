@@ -13,6 +13,7 @@ mod projects;
 mod settings;
 mod speakers;
 mod transcription;
+mod update;
 mod waveform;
 
 use models::DownloadManager;
@@ -39,6 +40,10 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // Updates: checked, downloaded, verified against the public key in
+        // tauri.conf.json and installed by the plugin; process relaunches.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(DownloadManager::new())
         .manage(agent::AgentState::default())
         .setup(|app| {
@@ -92,6 +97,8 @@ pub fn run() {
             transcription::transcribe,
             transcription::get_transcript,
             transcription::realign_transcript,
+            update::update_support,
+            update::set_update_menu_label,
             save_text_file,
         ])
         .run(tauri::generate_context!())

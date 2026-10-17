@@ -18,6 +18,7 @@ import {
 import type { ModelInfo, DownloadProgress } from '../hooks/useModels';
 import { ExternalLink } from '../components/editor/ToolCredit';
 import { AgentAccess } from '../components/settings/AgentAccess';
+import { UpdateSettings } from '../components/update/UpdateSettings';
 
 // Settings: the downloads Wave needs, grouped the way the editor's Tools are
 // (Clean up, Sound, People), one row each: what it does, its size and maker,
@@ -231,6 +232,7 @@ export function SettingsPage({
             </header>
             <AgentAccess />
           </section>
+          <UpdateSettings />
         </Stack>
       )}
     </div>

@@ -29,7 +29,10 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/**", "$HOME/**"]
+        "scope": [
+          "$APPDATA/**",
+          "$HOME/**"
+        ]
       }
     }
   },
@@ -49,9 +52,19 @@
     },
     "macOS": {
       "minimumSystemVersion": "13.4",
-      "frameworks": ["vendor/lame/libmp3lame.0.dylib"],
+      "frameworks": [
+        "vendor/lame/libmp3lame.0.dylib"
+      ],
       "signingIdentity": "-",
       "hardenedRuntime": false
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/mskayyali/wave/releases/latest/download/latest.json"
+      ]
     }
   }
 }
