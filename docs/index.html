@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Wave: edit audio by editing text</title>
-<meta name="description" content="Wave is a text-based audio editor for podcasts, made for the Mac. Delete a word in the transcript and it's cut from the audio. Everything runs on your Mac.">
+<meta name="description" content="Wave is a text-based audio editor for podcasts, made for the Mac. Edit the transcript to cut the audio, clean up the sound and see who said what. Everything runs on your Mac.">
 <meta name="theme-color" content="#0c0c0c">
 <link rel="icon" type="image/svg+xml" href="wave.svg">
 <meta property="og:type" content="website">
@@ -37,146 +37,180 @@
   --sel-line: #4589ff;
   --cut: #fa4d56;
   --fix: #42be65;
+  --host: #33b1ff;
+  --guest: #08bdba;
   --display: 'Fraunces', 'Iowan Old Style', Georgia, serif;
   --sans: 'IBM Plex Sans', -apple-system, 'Helvetica Neue', sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
-  --page: 1160px;
-  --gutter: 24px;
+  --pad: clamp(16px, 3.2vw, 48px);
   --ease: cubic-bezier(0.65, 0, 0.35, 1);
 }
 
 * { box-sizing: border-box; }
+html, body { height: 100%; }
 html { background: var(--bg); color: var(--text); -webkit-text-size-adjust: 100%; }
-@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
 body {
   margin: 0;
+  overflow: hidden;
   background: var(--bg);
-  font: 400 16px/1.6 var(--sans);
+  font: 400 15px/1.55 var(--sans);
   color: var(--text-2);
   -webkit-font-smoothing: antialiased;
-  overflow-x: clip;
 }
-/* A faint grain over everything, like tape hiss you can see. */
+/* A faint grain over the slide. */
 body::before {
   content: '';
   position: fixed; inset: 0;
   pointer-events: none;
-  z-index: 50;
+  z-index: 0;
   opacity: 0.045;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 a { color: inherit; }
-img { max-width: 100%; height: auto; display: block; }
-.wrap { max-width: var(--page); margin: 0 auto; padding: 0 var(--gutter); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
 .mono { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
 kbd {
   display: inline-grid; place-items: center;
-  min-width: 1.9em; height: 1.9em; padding: 0 0.45em;
-  font: 500 0.82em/1 var(--sans);
+  min-width: 1.8em; height: 1.8em; padding: 0 0.4em;
+  font: 500 0.8em/1 var(--sans);
   color: var(--text);
   background: var(--layer-2);
   border: 1px solid var(--line-2);
   border-bottom-width: 2px;
   border-radius: 4px;
-  vertical-align: 0.05em;
 }
 
-/* ── Header ─────────────────────────────────────────────────────────────── */
-header.top {
-  position: sticky; top: 0; z-index: 40;
-  background: rgba(12, 12, 12, 0.78);
-  backdrop-filter: saturate(140%) blur(14px);
-  -webkit-backdrop-filter: saturate(140%) blur(14px);
-  border-bottom: 1px solid rgba(38, 38, 38, 0.7);
+/* ── The slide: one screen, no scrolling ────────────────────────────────── */
+.slide {
+  position: relative;
+  z-index: 1;
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  padding: 0 var(--pad);
 }
-header.top .wrap { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+.slide::before {
+  content: '';
+  position: absolute; right: 0; top: 0;
+  width: 70%; height: 80%;
+  background: radial-gradient(closest-side at 62% 48%, rgba(232, 160, 32, 0.10), transparent 70%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* Top bar */
+.bar { display: flex; align-items: center; justify-content: space-between; height: clamp(52px, 8vh, 72px); }
 .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
 .brand svg { width: 22px; height: 18px; }
 .brand span { font: 600 22px/1 var(--display); color: var(--text); letter-spacing: -0.01em; font-variation-settings: 'opsz' 48; }
-nav.links { display: flex; align-items: center; gap: 28px; font-size: 14px; }
-nav.links a { text-decoration: none; color: var(--text-2); transition: color 0.2s; }
-nav.links a:hover { color: var(--text); }
-nav.links .gh { display: inline-flex; align-items: center; gap: 8px; }
-nav.links .gh svg { width: 16px; height: 16px; fill: currentColor; }
-
-/* ── Buttons ────────────────────────────────────────────────────────────── */
-.btn {
-  display: inline-flex; align-items: center; gap: 14px;
-  height: 52px; padding: 0 22px 0 20px;
-  font: 500 16px/1 var(--sans);
-  text-decoration: none;
-  color: #161616;
-  background: var(--amber);
-  transition: background 0.2s, transform 0.2s var(--ease);
+.bar nav { display: flex; align-items: center; gap: 4px; }
+.navbtn {
+  height: 34px; padding: 0 12px;
+  border: 0; background: none; cursor: pointer;
+  font-size: 14px; color: var(--text-2);
+  text-decoration: none; display: inline-flex; align-items: center; gap: 8px;
+  transition: color 0.2s, background-color 0.2s;
 }
-.btn:hover { background: var(--amber-hi); }
-.btn:active { transform: translateY(1px); }
-.btn svg { width: 18px; height: 18px; }
-.btn:focus-visible, a:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
-.link-arrow { color: var(--text-2); text-decoration: none; font-size: 15px; border-bottom: 1px solid var(--line-2); padding-bottom: 2px; transition: color 0.2s, border-color 0.2s; }
-.link-arrow:hover { color: var(--text); border-color: var(--text-3); }
+.navbtn:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+.navbtn svg { width: 16px; height: 16px; fill: currentColor; }
 
-/* ── Hero ───────────────────────────────────────────────────────────────── */
-.hero { position: relative; overflow: hidden; padding: 104px 0 40px; }
-.hero::before {
-  content: '';
-  position: absolute; left: 50%; top: 340px;
-  width: 1100px; height: 620px;
-  transform: translateX(-50%);
-  background: radial-gradient(closest-side, rgba(232, 160, 32, 0.11), rgba(232, 160, 32, 0.03) 55%, transparent);
-  pointer-events: none;
+/* Hero: words on the left, the demo on the right */
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: clamp(24px, 4vw, 64px);
+  align-items: center;
+  min-height: 0;
 }
-.hero .kicker { margin: 0 0 28px; }
-.hero h1 {
+.copy { display: flex; flex-direction: column; align-items: flex-start; }
+.kicker { margin: 0 0 clamp(10px, 2vh, 20px); }
+h1 {
   margin: 0;
-  max-width: 11em;
-  font: 330 clamp(52px, 9vw, 120px)/0.98 var(--display);
+  font: 330 clamp(38px, min(5vw, 8.4vh), 92px)/0.98 var(--display);
   font-variation-settings: 'opsz' 144, 'SOFT' 30;
   letter-spacing: -0.025em;
   color: var(--text);
 }
-.hero h1 em {
-  font-style: italic;
-  font-weight: 300;
+h1 em {
+  font-style: italic; font-weight: 300;
   font-variation-settings: 'opsz' 144, 'SOFT' 100, 'WONK' 1;
   background-image: linear-gradient(var(--amber), var(--amber));
-  background-size: 100% 0.06em;
-  background-position: 0 92%;
-  background-repeat: no-repeat;
+  background-size: 100% 0.06em; background-position: 0 92%; background-repeat: no-repeat;
   padding: 0 0.04em;
 }
-.hero .lede { max-width: 34em; margin: 32px 0 40px; font-size: 19px; line-height: 1.6; color: var(--text-2); }
-.cta { display: flex; flex-wrap: wrap; align-items: center; gap: 18px 28px; }
-.cta .meta { width: 100%; margin: 2px 0 0; text-transform: none; letter-spacing: 0.02em; font-size: 13px; }
+.lede { max-width: 32em; margin: clamp(10px, 2vh, 22px) 0 clamp(14px, 2.6vh, 28px); font-size: clamp(15px, min(1.25vw, 2.2vh), 18px); line-height: 1.55; }
+.cta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 22px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 12px;
+  height: 48px; padding: 0 22px 0 18px;
+  font: 500 16px/1 var(--sans);
+  text-decoration: none;
+  color: #161616; background: var(--amber);
+  transition: background 0.2s;
+}
+.btn:hover { background: var(--amber-hi); }
+.btn svg { width: 18px; height: 18px; }
+.linkbtn { border: 0; background: none; padding: 0 0 2px; cursor: pointer; font-size: 15px; color: var(--text-2); border-bottom: 1px solid var(--line-2); text-decoration: none; transition: color 0.2s, border-color 0.2s; }
+.linkbtn:hover { color: var(--text); border-color: var(--text-3); }
+.meta { margin: 10px 0 0; font: 400 12.5px/1.5 var(--mono); color: var(--text-3); }
+.firstrun {
+  display: flex; gap: 10px; align-items: flex-start;
+  max-width: 40em;
+  margin: clamp(10px, 2vh, 20px) 0 0;
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  background: rgba(22, 22, 22, 0.7);
+  font-size: 13px; line-height: 1.5;
+}
+.firstrun svg { flex: 0 0 16px; width: 16px; height: 16px; margin-top: 1px; fill: var(--text-3); }
+.firstrun .linkbtn { font-size: 13px; }
 
-/* ── The demo: a transcript line over its waveform ─────────────────────── */
+/* ── The demo: two speakers' lines over their waveform ──────────────────── */
 .stage {
   position: relative;
-  margin: 72px 0 0;
+  margin: 0;
   border: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(22, 22, 22, 0.96), rgba(16, 16, 16, 0.96));
   box-shadow: 0 40px 120px -40px rgba(0, 0, 0, 0.9);
 }
-.stage-bar {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--line);
-}
+.stage-bar { display: flex; justify-content: space-between; align-items: center; padding: 11px 16px; border-bottom: 1px solid var(--line); }
 .stage-bar .dots { display: flex; gap: 6px; }
 .stage-bar .dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--line-2); display: block; }
-.line {
-  display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: center;
-  row-gap: 26px;
-  min-height: 260px;
-  padding: 64px 32px 56px;
-  font: 400 clamp(22px, 3.8vw, 48px)/1.1 var(--display);
+.turns {
+  display: flex; flex-direction: column; gap: clamp(14px, 3vh, 28px);
+  padding: clamp(18px, 4vh, 44px) clamp(16px, 2.4vw, 32px);
+  font: 400 clamp(18px, min(2vw, 3.4vh), 34px)/1.1 var(--display);
   font-variation-settings: 'opsz' 96;
   color: var(--text);
-  --gap: 0.36em;
   transition: opacity 0.45s;
 }
-.line.fading { opacity: 0; }
+.turns.fading { opacity: 0; }
+.turn { display: flex; flex-direction: column; gap: 0.5em; }
+.who {
+  display: flex; align-items: center; gap: 8px;
+  height: 18px;
+  font: 500 12px/1 var(--sans); letter-spacing: 0.02em;
+  color: var(--speaker);
+  opacity: 0; transform: translateY(4px);
+  transition: opacity 0.4s, transform 0.4s var(--ease);
+}
+.who::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--speaker); }
+.speakers-on .who { opacity: 1; transform: none; }
+.line { position: relative; display: flex; flex-wrap: wrap; align-items: flex-end; row-gap: 14px; --gap: 0.34em; }
+/* Background hiss under the waveform, until it's cleaned up. */
+.hiss {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 0.95em;
+  display: flex; align-items: center; gap: 2px;
+  overflow: hidden;
+  pointer-events: none;
+  transition: opacity 0.9s, transform 0.9s var(--ease);
+}
+.hiss i { flex: 0 0 2px; height: var(--h); background: #3a3a3a; border-radius: 1px; }
+.clean .hiss { opacity: 0; transform: scaleY(0.2); }
 .tok {
+  position: relative;
   display: flex; flex-direction: column; align-items: flex-start; gap: 0.32em;
   max-width: var(--w, 8em);
   margin-right: var(--gap);
@@ -185,311 +219,353 @@ nav.links .gh svg { width: 16px; height: 16px; fill: currentColor; }
 }
 .tok:last-child { margin-right: 0; }
 .tok.gone { max-width: 0; margin-right: 0; opacity: 0; }
-.word {
-  width: max-content;
-  padding: 0.02em 0.06em;
-  margin: 0 -0.06em;
-  white-space: nowrap;
-  transition: color 0.25s, background-color 0.25s, box-shadow 0.25s;
-}
-.wave { display: flex; align-items: center; gap: 3px; height: 0.95em; width: var(--w, 8em); }
-.wave b { flex: 0 0 3px; height: var(--h); border-radius: 2px; background: #4f4f4f; transition: background-color 0.25s, opacity 0.3s; }
+.word { width: max-content; padding: 0.02em 0.06em; margin: 0 -0.06em; white-space: nowrap; transition: color 0.25s, background-color 0.25s, box-shadow 0.25s; }
+.wave { position: relative; z-index: 1; display: flex; align-items: center; gap: 3px; height: 0.95em; width: var(--w, 8em); }
+.wave b { flex: 0 0 3px; height: var(--h); border-radius: 2px; background: #575757; transition: background-color 0.4s, opacity 0.3s; }
+.speakers-on .turn .wave b { background: color-mix(in srgb, var(--speaker) 55%, #575757); }
 .pause .word { font: 400 max(10px, 0.32em)/2.9 var(--mono); letter-spacing: 0.04em; color: var(--text-3); width: auto; text-align: center; align-self: stretch; }
 .pause .wave { justify-content: center; }
 .pause .wave::before { content: ''; display: block; width: 100%; height: 2px; border-radius: 1px; background: #3a3a3a; }
-
 .tok.sel .word { background-color: var(--sel); box-shadow: inset 0 -2px var(--sel-line); }
 .tok.sel .wave b { background: var(--sel-line); }
 .tok.sel.pause .wave::before { background: var(--sel-line); }
 .tok.cut .word { color: var(--cut); background-color: rgba(250, 77, 86, 0.12); box-shadow: none; text-decoration: line-through; text-decoration-thickness: 0.06em; }
 .tok.cut .wave b { background: var(--cut); opacity: 0.55; }
 .tok.fixed .word { box-shadow: inset 0 -0.07em var(--fix); background-color: rgba(66, 190, 101, 0.1); }
-.tok.played .word { color: var(--amber); }
-.tok.played .wave b { background: var(--amber); }
-.tok.played.pause .wave::before { background: var(--amber); }
-
-.stage-foot {
-  display: flex; align-items: center; justify-content: space-between; gap: 16px;
-  padding: 14px 20px;
-  border-top: 1px solid var(--line);
-  font-size: 14px;
-  color: var(--text-2);
-  min-height: 52px;
-}
+.turns .tok.played .word { color: var(--amber); }
+.turns .tok.played .wave b { background: var(--amber); }
+.turns .tok.played.pause .wave::before { background: var(--amber); }
+.stage-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 16px; border-top: 1px solid var(--line); font-size: 14px; color: var(--text-2); min-height: 46px; }
 .status { display: flex; align-items: center; gap: 10px; transition: opacity 0.25s; }
 .status.swap { opacity: 0; }
 .status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 4px rgba(232, 160, 32, 0.15); }
 
-/* ── Screenshot ─────────────────────────────────────────────────────────── */
-.shot { position: relative; padding: 120px 0 40px; }
-.shot figure { margin: 0; position: relative; }
-.shot figure::before {
-  content: '';
-  position: absolute; inset: 8% 6% -4%;
-  background: radial-gradient(closest-side, rgba(232, 160, 32, 0.12), transparent);
-  filter: blur(40px);
-  z-index: -1;
+/* ── The four things Wave does, in order ───────────────────────────────── */
+.pillars {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.05fr);
+  gap: 0;
+  margin: clamp(12px, 2.4vh, 28px) 0 0;
+  border-top: 1px solid var(--line);
 }
-.shot figcaption { margin-top: 18px; text-align: center; }
-
-/* ── Sections ───────────────────────────────────────────────────────────── */
-section.block { padding: 112px 0 0; }
-.block-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 32px; align-items: end; margin-bottom: 56px; }
-.block-head h2 {
-  margin: 0;
-  font: 360 clamp(36px, 5vw, 60px)/1.02 var(--display);
-  font-variation-settings: 'opsz' 120, 'SOFT' 30;
-  letter-spacing: -0.02em;
-  color: var(--text);
+.pillar {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  padding: clamp(12px, 2vh, 22px) clamp(14px, 1.6vw, 24px) clamp(12px, 2vh, 22px) 0;
+  border: 0; background: none; text-align: left; cursor: pointer;
+  color: var(--text-2);
 }
-.block-head p { margin: 0; max-width: 36em; font-size: 17px; }
+.pillar + .pillar { padding-left: clamp(14px, 1.6vw, 24px); border-left: 1px solid var(--line); }
+.pillar .n { font: 400 12px/1 var(--mono); letter-spacing: 0.06em; color: var(--amber); }
+.pillar h2 { margin: 2px 0 0; font: 450 clamp(19px, min(1.6vw, 2.8vh), 24px)/1.2 var(--display); font-variation-settings: 'opsz' 48; color: var(--text); transition: color 0.2s; }
+.pillar p { margin: 0; font-size: clamp(13px, min(1.05vw, 1.9vh), 14.5px); line-height: 1.5; }
+.pillar .top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; width: 100%; }
+.pillar .more { font-size: 13px; color: var(--text-3); transition: color 0.2s; }
+.pillar:hover .more, .pillar:hover h2 { color: var(--amber-hi); }
+.pillar--agent { background: rgba(232, 160, 32, 0.04); }
+.pillar--agent .n { color: var(--text-3); }
 
-.trio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.trio div { padding: 36px 32px 40px 0; }
-.trio div + div { padding-left: 32px; border-left: 1px solid var(--line); }
-.trio h3 { margin: 0 0 12px; font: 400 32px/1.1 var(--display); font-variation-settings: 'opsz' 72; color: var(--text); }
-.trio p { margin: 0; font-size: 15px; }
+/* Footer */
+.foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: clamp(40px, 6vh, 56px); border-top: 1px solid var(--line); font-size: 13px; color: var(--text-3); }
+.foot .links { display: flex; gap: 18px; align-items: center; }
+.foot a, .foot button { border: 0; background: none; padding: 0; cursor: pointer; font-size: 13px; color: var(--text-2); text-decoration: none; }
+.foot a:hover, .foot button:hover { color: var(--text); }
 
-.index { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 64px; counter-reset: feat; }
-.index article { display: grid; grid-template-columns: 52px minmax(0, 1fr); padding: 26px 0 30px; border-top: 1px solid var(--line); }
-.index article::before { counter-increment: feat; content: counter(feat, decimal-leading-zero); font: 400 12px/2.4 var(--mono); color: var(--amber); letter-spacing: 0.06em; }
-.index h3 { margin: 0 0 8px; font: 450 24px/1.2 var(--display); font-variation-settings: 'opsz' 48; color: var(--text); }
-.index p { margin: 0; font-size: 15px; color: var(--text-2); }
-
-.agents { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 56px; align-items: start; }
-.agents p { margin: 0 0 18px; font-size: 17px; }
-.chat { border: 1px solid var(--line); background: var(--layer); }
-.chat .row { padding: 22px 24px; }
-.chat .row + .row { border-top: 1px solid var(--line); }
-.chat .who { margin-bottom: 10px; }
-.chat q { display: block; font: italic 300 23px/1.4 var(--display); font-variation-settings: 'opsz' 48, 'SOFT' 60; color: var(--text); quotes: '“' '”'; }
-.chat pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 400 13px/1.7 var(--mono); color: var(--text-2); }
-.chat pre .p { color: var(--text-3); user-select: none; }
-
-.install { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 56px; align-items: start; }
-.steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
-.steps li { position: relative; padding: 0 0 34px 64px; }
-.steps li::before {
-  counter-increment: step; content: counter(step);
-  position: absolute; left: 0; top: -6px;
-  font: 300 42px/1 var(--display); font-variation-settings: 'opsz' 144;
-  color: var(--amber);
+/* ── Panels: more about each part, over the slide ──────────────────────── */
+dialog.panel {
+  width: min(760px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  padding: 0;
+  border: 1px solid var(--line-2);
+  background: #121212;
+  color: var(--text-2);
+  box-shadow: 0 40px 140px -20px rgba(0, 0, 0, 0.9);
+  overflow: hidden;
 }
-.steps h3 { margin: 0 0 6px; font: 500 17px/1.4 var(--sans); color: var(--text); }
-.steps p { margin: 0; font-size: 15px; }
-.steps code { display: block; width: fit-content; max-width: 100%; margin-top: 10px; font: 400 13px/1.6 var(--mono); color: var(--text); background: var(--layer-2); padding: 6px 10px; border: 1px solid var(--line); overflow-wrap: anywhere; }
-.needs { border: 1px solid var(--line); background: var(--layer); padding: 28px 28px 30px; }
-.needs h3 { margin: 10px 0 14px; font: 400 26px/1.2 var(--display); font-variation-settings: 'opsz' 72; color: var(--text); }
-.needs ul { margin: 0 0 26px; padding: 0; list-style: none; }
-.needs li { padding: 10px 0; border-top: 1px solid var(--line); font-size: 15px; }
-.needs li:first-child { border-top: 0; }
-.needs .btn { width: 100%; justify-content: center; }
-
-/* ── Closing and footer ─────────────────────────────────────────────────── */
-.closing { padding: 144px 0 120px; text-align: center; }
-.closing h2 {
-  margin: 0 auto 36px; max-width: 13em;
-  font: 330 clamp(40px, 6.4vw, 84px)/1 var(--display);
-  font-variation-settings: 'opsz' 144, 'SOFT' 30;
-  letter-spacing: -0.025em; color: var(--text);
+dialog.panel[open] { display: flex; flex-direction: column; animation: panel-in 0.35s var(--ease); }
+dialog.panel::backdrop { background: rgba(0, 0, 0, 0.62); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+@keyframes panel-in { from { opacity: 0; transform: translateY(12px); } }
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px 16px; border-bottom: 1px solid var(--line); }
+.panel-head h2 { margin: 0; font: 380 clamp(26px, 3vw, 34px)/1.05 var(--display); font-variation-settings: 'opsz' 96, 'SOFT' 30; letter-spacing: -0.015em; color: var(--text); }
+.close { width: 36px; height: 36px; display: grid; place-items: center; border: 0; background: none; cursor: pointer; color: var(--text-2); }
+.close:hover { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+.close svg { width: 18px; height: 18px; fill: currentColor; }
+.panel-body { overflow-y: auto; padding: 20px 24px 28px; }
+.panel-body:focus { outline: none; }
+.panel-body > p:first-child { margin-top: 0; }
+.panel-body p { margin: 0 0 14px; font-size: 15px; }
+.panel-body h3 { margin: 24px 0 10px; font: 500 12px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--amber); }
+.panel-body h3:first-of-type { margin-top: 4px; }
+.panel-body ul, .panel-body ol { margin: 0; padding-left: 20px; }
+.panel-body li { margin: 0 0 8px; font-size: 15px; }
+.panel-body li::marker { color: var(--text-3); }
+.panel-body strong { color: var(--text); font-weight: 500; }
+.panel-body code, .panel-body pre {
+  font: 400 13px/1.6 var(--mono); color: var(--text);
+  background: var(--layer-2); border: 1px solid var(--line);
 }
-.closing .cta { justify-content: center; }
-footer { border-top: 1px solid var(--line); padding: 44px 0 56px; font-size: 14px; color: var(--text-3); }
-footer .wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: 40px; }
-footer p { margin: 0 0 10px; }
-footer a { color: var(--text-2); text-decoration: none; border-bottom: 1px solid var(--line-2); }
-footer a:hover { color: var(--text); }
+.panel-body code { padding: 1px 6px; overflow-wrap: anywhere; }
+.panel-body pre { margin: 8px 0 12px; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.panel-body img { display: block; width: 100%; height: auto; margin: 0 0 18px; }
+.panel-body a { color: var(--text); text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+.panel-body a:hover { text-decoration-color: var(--text-3); }
+.prompt { margin: 6px 0 14px; padding: 14px 16px; border-left: 2px solid var(--amber); background: var(--layer); font: italic 300 20px/1.4 var(--display); font-variation-settings: 'opsz' 48, 'SOFT' 60; color: var(--text); }
+.panel-body .needs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 20px; margin: 0 0 6px; padding: 0; list-style: none; }
+.panel-body .needs li { margin: 0; padding: 10px 12px; border: 1px solid var(--line); background: var(--layer); font-size: 14px; }
 
 /* ── Arrival ────────────────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: no-preference) {
-  .rise { opacity: 0; transform: translateY(14px); animation: rise 0.9s var(--ease) forwards; animation-delay: calc(var(--i, 0) * 110ms + 80ms); }
+  .rise { opacity: 0; transform: translateY(12px); animation: rise 0.9s var(--ease) forwards; animation-delay: calc(var(--i, 0) * 100ms + 60ms); }
   @keyframes rise { to { opacity: 1; transform: none; } }
 }
 
-/* ── Smaller screens ────────────────────────────────────────────────────── */
-@media (max-width: 860px) {
-  .block-head, .agents, .install, footer .wrap { grid-template-columns: minmax(0, 1fr); }
-  .index { grid-template-columns: minmax(0, 1fr); }
-  .trio { grid-template-columns: minmax(0, 1fr); }
-  .trio div, .trio div + div { padding: 28px 0; border-left: 0; }
-  .trio div + div { border-top: 1px solid var(--line); }
+/* ── Smaller screens: the slide becomes a page that scrolls ────────────── */
+@media (max-width: 960px), (max-height: 600px) {
+  body { overflow: auto; }
+  .slide { height: auto; min-height: 100dvh; }
+  .hero { grid-template-columns: minmax(0, 1fr); padding: 24px 0 8px; }
+  .pillars { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pillar:nth-child(3) { padding-left: 0; border-left: 0; }
+  .pillar:nth-child(n+3) { border-top: 1px solid var(--line); }
 }
-@media (max-width: 600px) {
-  :root { --gutter: 16px; }
-  nav.links .hide-sm { display: none; }
-  .hero { padding-top: 64px; }
-  .hero .lede { font-size: 17px; }
-  .line { padding: 44px 16px 40px; min-height: 0; }
+@media (max-width: 560px) {
+  .bar .hide-sm { display: none; }
+  .pillars { grid-template-columns: minmax(0, 1fr); }
+  .pillar, .pillar + .pillar { padding-left: 0; border-left: 0; }
+  .pillar + .pillar { border-top: 1px solid var(--line); }
+  .pillar--agent { padding-left: 12px; }
+  .foot { flex-direction: column; align-items: flex-start; height: auto; padding: 14px 0; }
+  .needs { grid-template-columns: minmax(0, 1fr); }
   .stage-bar .file { display: none; }
-  section.block { padding-top: 88px; }
 }
 </style>
 </head>
 <body>
 
-<header class="top">
-  <div class="wrap">
-    <a class="brand" href="#" aria-label="Wave">
+<div class="slide">
+  <header class="bar">
+    <a class="brand" href="./" aria-label="Wave">
       <svg viewBox="0 0 22 18" fill="#e8a020" aria-hidden="true"><rect x="0" y="7" width="2.5" height="4" rx="1.25"/><rect x="4" y="3" width="2.5" height="12" rx="1.25"/><rect x="8" y="0" width="2.5" height="18" rx="1.25"/><rect x="12" y="4" width="2.5" height="10" rx="1.25"/><rect x="16" y="1" width="2.5" height="16" rx="1.25"/><rect x="20" y="6" width="2.5" height="6" rx="1.25" opacity="0.6"/></svg>
       <span>Wave</span>
     </a>
-    <nav class="links">
-      <a class="hide-sm" href="#features">Features</a>
-      <a class="hide-sm" href="#install">Install</a>
-      <a class="gh" href="https://github.com/mskayyali/wave">
+    <nav aria-label="More about Wave">
+      <button class="navbtn hide-sm" data-open="features">Features</button>
+      <button class="navbtn hide-sm" data-open="agents">AI agents</button>
+      <button class="navbtn" data-open="install">Install</button>
+      <a class="navbtn" href="https://github.com/mskayyali/wave">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
         GitHub
       </a>
     </nav>
-  </div>
-</header>
+  </header>
 
-<main>
-  <section class="hero">
-    <div class="wrap">
+  <main class="hero">
+    <section class="copy">
       <p class="kicker mono rise" style="--i:0">A podcast editor for the Mac</p>
       <h1 class="rise" style="--i:1">Edit audio by editing <em>text</em>.</h1>
-      <p class="lede rise" style="--i:2">Wave transcribes your recording on your Mac. Delete a word in the transcript and it's cut from the audio. Trim the “um”s, tighten the pauses, clean up the sound, and export.</p>
+      <p class="lede rise" style="--i:2">Wave transcribes your recording on your Mac. Cut words in the transcript and the audio follows. Then clean up the sound, and see who said what.</p>
       <div class="cta rise" style="--i:3">
-        <a class="btn" data-download href="https://github.com/mskayyali/wave/releases/download/v1.0.0/Wave_1.0.0_aarch64.dmg">
+        <a class="btn" data-download href="https://github.com/mskayyali/wave/releases/download/v1.1.0/Wave_1.1.0_aarch64.dmg">
           <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M14.6 10.6c0-2 1.6-2.9 1.7-3-.9-1.4-2.4-1.6-2.9-1.6-1.2-.1-2.4.7-3 .7-.6 0-1.6-.7-2.6-.7-1.3 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7.9 1.5 2 2.5 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.6.6 1.1 0 1.8-1 2.4-1.9.8-1.1 1.1-2.2 1.1-2.2s-2.1-.8-2.1-3.2zM12.7 4.6c.5-.7.9-1.6.8-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.8 2.5.9.1 1.8-.4 2.4-1.1z"/></svg>
           Download for Mac
         </a>
-        <a class="link-arrow" href="https://github.com/mskayyali/wave">Source on GitHub →</a>
-        <p class="meta mono">Version <span data-version>1.0.0</span>, <span data-size>17 MB</span>. For Macs with Apple Silicon and macOS 13.4 or later.</p>
+        <button class="linkbtn" data-open="install">How to install</button>
       </div>
+      <p class="meta rise" style="--i:3">Version <span data-version>1.1.0</span>, <span data-size>19 MB</span>. For Macs with Apple Silicon and macOS 13.4 or later.</p>
+      <p class="firstrun rise" style="--i:4">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 1.2a5.8 5.8 0 110 11.6A5.8 5.8 0 018 2.2zM7.4 7h1.2v4.5H7.4zM8 4.4a.8.8 0 110 1.6.8.8 0 010-1.6z"/></svg>
+        <span>Wave isn’t notarized by Apple yet, so its first launch needs you to allow it once in Privacy &amp; Security. <button class="linkbtn" data-open="install">Show me how</button></span>
+      </p>
+    </section>
 
-      <figure class="stage rise" style="--i:4" aria-label="A demonstration: a long pause is shortened, the filler word “um” is cut, and the misheard “tax.” is corrected to “text.”, leaving: So, editing audio is just editing text.">
-        <div class="stage-bar" aria-hidden="true">
-          <div class="dots"><i></i><i></i><i></i></div>
-          <span class="file mono">Episode 12</span>
-          <span class="mono">Flow</span>
-        </div>
-        <div class="line" id="line" aria-hidden="true"></div>
-        <figcaption class="stage-foot" aria-hidden="true">
-          <span class="status" id="status"><span class="dot"></span><span id="status-text">Transcribed on your Mac</span></span>
-          <span class="mono" id="clock">0:04.2</span>
-        </figcaption>
-      </figure>
-    </div>
+    <figure class="stage rise" style="--i:3" aria-label="A demonstration: a long pause is shortened, the filler “um” is cut, the misheard “tax.” is corrected to “text.”, the background hiss is cleaned away, and the two speakers are named.">
+      <div class="stage-bar" aria-hidden="true">
+        <div class="dots"><i></i><i></i><i></i></div>
+        <span class="file mono">Episode 12</span>
+        <span class="mono">Flow</span>
+      </div>
+      <div class="turns" id="turns" aria-hidden="true"></div>
+      <figcaption class="stage-foot" aria-hidden="true">
+        <span class="status" id="status"><span class="dot"></span><span id="status-text">Transcribed on your Mac</span></span>
+        <span class="mono" id="clock">0:05.1</span>
+      </figcaption>
+    </figure>
+  </main>
+
+  <section class="pillars rise" style="--i:5" aria-label="What Wave does">
+    <button class="pillar" data-open="features" data-section="editing">
+      <span class="top"><span class="n">01</span><span class="more">More →</span></span>
+      <h2>Edit the text</h2>
+      <p>Delete words, fillers or pauses, and the audio is cut to match, with clean joins.</p>
+    </button>
+    <button class="pillar" data-open="features" data-section="sound">
+      <span class="top"><span class="n">02</span><span class="more">More →</span></span>
+      <h2>Clean up the sound</h2>
+      <p>Remove background noise and room echo, shape the voice with EQ, and set the loudness.</p>
+    </button>
+    <button class="pillar" data-open="features" data-section="speakers">
+      <span class="top"><span class="n">03</span><span class="more">More →</span></span>
+      <h2>Know who’s speaking</h2>
+      <p>Speaker detection names each voice, and finds everything one person said.</p>
+    </button>
+    <button class="pillar pillar--agent" data-open="agents">
+      <span class="top"><span class="n">And</span><span class="more">How it works →</span></span>
+      <h2>Edit with an AI agent</h2>
+      <p>Claude or ChatGPT can make the same edits through Wave, live and undoable.</p>
+    </button>
   </section>
 
-  <section class="shot">
-    <div class="wrap">
-      <figure>
-        <img src="screenshot.webp" width="2000" height="1377" alt="Wave's window: the Projects page welcoming you, with the steps to set up transcription, import a recording and edit the text." loading="lazy">
-        <figcaption class="mono">Wave 1.0 on macOS</figcaption>
-      </figure>
-    </div>
-  </section>
+  <footer class="foot">
+    <span>Wave is free, and nothing leaves your Mac.</span>
+    <span class="links">
+      <span>Built by <a href="https://mskayyali.com">Saleh Kayyali</a></span>
+      <button data-open="credits">Credits</button>
+      <a href="https://github.com/mskayyali/wave">Source</a>
+    </span>
+  </footer>
+</div>
 
-  <section class="block">
-    <div class="wrap">
-      <div class="block-head">
-        <h2>Nothing leaves your Mac.</h2>
-        <p>Transcription, noise removal and speaker detection all run on your Mac, on its GPU and CPU. There's no account, no cloud and no upload.</p>
-      </div>
-      <div class="trio">
-        <div><h3>Local</h3><p>Whisper and the other models run on Apple Silicon, at several times real time.</p></div>
-        <div><h3>Private</h3><p>Your recordings and transcripts stay in a folder on your Mac. Wave never sends them anywhere. If you connect an AI agent, its service sees the text it reads.</p></div>
-        <div><h3>Free</h3><p>No subscription and no limits. The models download once; after that, Wave works offline.</p></div>
-      </div>
-    </div>
-  </section>
+<!-- ── Panels ─────────────────────────────────────────────────────────── -->
 
-  <section class="block" id="features">
-    <div class="wrap">
-      <div class="block-head">
-        <h2>Made for the edit.</h2>
-        <p>Text for the words, a waveform for the exact trims, and the tools a podcast needs before it ships.</p>
-      </div>
-      <div class="index">
-        <article><div><h3>Verbatim transcription</h3><p>Whisper writes what was said, “um”s and “uh”s included (English), and every word is aligned to its exact audio.</p></div></article>
-        <article><div><h3>Edit the text</h3><p>Delete words, pauses or any stretch. Playback joins the cuts with the same short crossfade as the export, so what you hear is what you get.</p></div></article>
-        <article><div><h3>An exact waveform</h3><p>Trim what the text can't, like a breath or the tail of a word, down to the millisecond.</p></div></article>
-        <article><div><h3>Fix what was misheard</h3><p>Correct a word in place. The correction carries into every export and undoes like any edit.</p></div></article>
-        <article><div><h3>Pauses</h3><p>Shorten long pauses to a Tight, Natural or Relaxed rhythm, or add one, filled with the room's own quiet.</p></div></article>
-        <article><div><h3>Speech enhancement</h3><p>Remove background noise and room echo, apply a voice EQ preset, and set the loudness for podcast delivery.</p></div></article>
-        <article><div><h3>Speakers</h3><p>See who speaks when, for up to 8 people. Rename them, merge them, or select everything one person said.</p></div></article>
-        <article><div><h3>Export</h3><p>MP3, AAC, WAV or FLAC, plus the transcript as TXT, SRT, WebVTT or JSON, all with your cuts.</p></div></article>
-      </div>
-    </div>
-  </section>
-
-  <section class="block">
-    <div class="wrap agents">
-      <div>
-        <div class="block-head" style="grid-template-columns:1fr;margin-bottom:28px"><h2>Edit with Claude or ChatGPT.</h2></div>
-        <p>Wave includes an MCP server, so an AI agent can read your transcript and make the same edits you can. The edits appear in Wave as they're made, marked with the agent's name, and ⌘Z undoes them. The agent works from the transcript, so its AI service sees that text; the audio stays on your Mac.</p>
-        <p><a class="link-arrow" href="https://github.com/mskayyali/wave#using-wave-with-claude-or-chatgpt">Set it up →</a></p>
-      </div>
-      <div class="chat">
-        <div class="row">
-          <div class="who mono">You ask</div>
-          <q>In Episode 12, remove the filler words and false starts, tighten the pauses, and enhance the audio.</q>
-        </div>
-        <div class="row">
-          <div class="who mono">Add Wave to Claude Code</div>
-          <pre><span class="p">$ </span>claude mcp add --scope user wave -- /Applications/Wave.app/Contents/MacOS/wave mcp</pre>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="block" id="install">
-    <div class="wrap">
-      <div class="block-head">
-        <h2>Install in a minute.</h2>
-        <p>Download the app, open it once through Privacy & Security, and get the speech models in Settings.</p>
-      </div>
-      <div class="install">
-        <ol class="steps">
-          <li><h3>Download and drag Wave to Applications</h3><p>Open the DMG and drag Wave into your Applications folder.</p></li>
-          <li><h3>Open it the first time</h3><p>Wave isn't notarized by Apple yet, so macOS says it can't verify it. Click Done, then open <strong>System Settings → Privacy & Security</strong> and click <strong>Open Anyway</strong>. You only do this once. Or, in Terminal:</p><code class="cmd">xattr -dr com.apple.quarantine /Applications/Wave.app</code></li>
-          <li><h3>Download the speech models</h3><p>Click <strong>Set up transcription</strong> and download Transcription (1.6 GB). Noise removal (14 MB) and speaker detection (115 MB) are optional.</p></li>
-          <li><h3>Drop in a recording</h3><p>MP3, WAV, M4A, FLAC and more. Select words, press <kbd>⌫</kbd>, and listen.</p></li>
-        </ol>
-        <aside class="needs">
-          <span class="mono">What you need</span>
-          <h3>A Mac with Apple Silicon</h3>
-          <ul>
-            <li>M1 or later. Intel Macs aren't supported.</li>
-            <li>macOS 13.4 (Ventura) or later.</li>
-            <li>About 2 GB free for the speech models.</li>
-            <li>An internet connection once, to download them.</li>
-          </ul>
-          <a class="btn" data-download href="https://github.com/mskayyali/wave/releases/download/v1.0.0/Wave_1.0.0_aarch64.dmg"><span>Download Wave <span data-version>1.0.0</span></span></a>
-        </aside>
-      </div>
-    </div>
-  </section>
-
-  <section class="closing">
-    <div class="wrap">
-      <h2>So, editing audio is just editing <em style="font-style:italic;font-weight:300">text</em>.</h2>
-      <div class="cta">
-        <a class="btn" data-download href="https://github.com/mskayyali/wave/releases/download/v1.0.0/Wave_1.0.0_aarch64.dmg">Download for Mac</a>
-        <a class="link-arrow" href="https://github.com/mskayyali/wave/releases">All releases →</a>
-      </div>
-    </div>
-  </section>
-</main>
-
-<footer>
-  <div class="wrap">
-    <div>
-      <p style="color:var(--text-2)">Wave is built by <a href="https://mskayyali.com">Saleh Kayyali</a> (<a href="https://x.com/mskayyali">@mskayyali</a>)</p>
-      <p><a href="https://github.com/mskayyali/wave">Source on GitHub</a></p>
-    </div>
-    <div>
-      <p>Wave runs <a href="https://github.com/ggml-org/whisper.cpp">Whisper</a> (MIT), <a href="https://huggingface.co/facebook/wav2vec2-base-960h">wav2vec2</a> (Apache-2.0), <a href="https://github.com/ceva-ip/DPDFNet">DPDFNet</a> by Ceva (Apache-2.0) and <a href="https://huggingface.co/nvidia/Nemotron-3-Diarization">Nemotron 3 Diarization</a> by NVIDIA (OpenMDW 1.1). MP3 export uses <a href="https://lame.sourceforge.io/">LAME</a> (LGPL).</p>
-      <p>This page loads nothing from anyone else. Its fonts are Fraunces and IBM Plex, under the SIL Open Font License (<a href="fonts/Fraunces-OFL.txt">Fraunces</a>, <a href="fonts/IBM-Plex-OFL.txt">IBM Plex</a>).</p>
-    </div>
+<dialog class="panel" id="features" aria-labelledby="features-title">
+  <div class="panel-head"><h2 id="features-title">What Wave does</h2><button class="close" data-close aria-label="Close"><svg viewBox="0 0 16 16"><path d="M12.7 4.3l-1-1L8 7 4.3 3.3l-1 1L7 8l-3.7 3.7 1 1L8 9l3.7 3.7 1-1L9 8z"/></svg></button></div>
+  <div class="panel-body" tabindex="-1" autofocus>
+    <img src="screenshot.webp" width="2000" height="1377" alt="Wave's window, welcoming you with the steps to set up transcription, import a recording and edit the text." loading="lazy">
+    <h3 id="editing">Editing</h3>
+    <ul>
+      <li>Delete words in the transcript and they’re cut from the audio, joined with a short crossfade. What you hear is what you export.</li>
+      <li>Whisper writes what was said, “um”s and “uh”s included (English), and every word is aligned to its exact audio.</li>
+      <li>Trim on the waveform to the millisecond, for a breath or the tail of a word.</li>
+      <li>Correct a misheard word in place. The correction carries into every export.</li>
+      <li>Find a phrase with <kbd>⌘</kbd> <kbd>F</kbd>, and cut its matches one by one.</li>
+      <li>Shorten long pauses to a Tight, Natural or Relaxed rhythm, or add a pause, filled with the room’s own quiet.</li>
+      <li>Undo anything. The original recording is never changed.</li>
+    </ul>
+    <h3 id="sound">Sound</h3>
+    <ul>
+      <li>Clean up removes background noise and room echo (DPDFNet), at Subtle, Medium or Full strength.</li>
+      <li>EQ presets for the voice, each named for what it fixes: Clearer, Warmer, Less boom, Less boxy, Less nasal, Brighter, Less harsh and Broadcast.</li>
+      <li>Loudness for podcast delivery: Apple Podcasts, Spotify and YouTube, or broadcast.</li>
+      <li>Preview 15 seconds against the original first, and switch between the two while playing.</li>
+    </ul>
+    <h3 id="speakers">Speakers</h3>
+    <ul>
+      <li>Speaker detection finds who speaks when, for up to 8 people (NVIDIA Nemotron 3 Diarization).</li>
+      <li>Rename or merge speakers, and select or delete everything one person said.</li>
+      <li>Names carry into TXT, SRT and WebVTT exports.</li>
+    </ul>
+    <h3>Export</h3>
+    <ul>
+      <li>MP3, AAC, WAV or FLAC, plus the transcript as TXT, SRT, WebVTT or JSON, all with your cuts.</li>
+    </ul>
+    <h3>On your Mac</h3>
+    <ul>
+      <li>Everything runs on Apple Silicon. No account, no cloud, no upload.</li>
+      <li>Wave updates itself: it checks quietly, shows what’s new, and asks before installing.</li>
+    </ul>
   </div>
-</footer>
+</dialog>
+
+<dialog class="panel" id="agents" aria-labelledby="agents-title">
+  <div class="panel-head"><h2 id="agents-title">Edit with an AI agent</h2><button class="close" data-close aria-label="Close"><svg viewBox="0 0 16 16"><path d="M12.7 4.3l-1-1L8 7 4.3 3.3l-1 1L7 8l-3.7 3.7 1 1L8 9l3.7 3.7 1-1L9 8z"/></svg></button></div>
+  <div class="panel-body" tabindex="-1" autofocus>
+    <p>Wave includes an MCP server, so an AI agent like Claude or ChatGPT can read your transcript and make the same edits you can: cut filler words and false starts, tighten pauses, fix misspelled names, clean up the sound and export. Each edit appears in Wave as it’s made, marked with the agent’s name, and <kbd>⌘</kbd> <kbd>Z</kbd> undoes it.</p>
+    <div class="prompt">“In Episode 12, remove the filler words and false starts, tighten the pauses, and enhance the audio with the Clearer EQ.”</div>
+    <h3>Set it up</h3>
+    <ol>
+      <li>In Wave, open <strong>Settings → AI agents</strong> and turn it on. It shows the exact setup for your copy of Wave.</li>
+      <li>Add Wave to your agent app once:
+        <p style="margin:8px 0 2px"><strong>Claude Code</strong></p>
+        <pre>claude mcp add --scope user wave -- /Applications/Wave.app/Contents/MacOS/wave mcp</pre>
+        <p style="margin:8px 0 2px"><strong>Claude Desktop</strong>: Settings → Developer → Edit Config, add this, then restart Claude.</p>
+        <pre>{ "mcpServers": { "wave": { "command": "/Applications/Wave.app/Contents/MacOS/wave", "args": ["mcp"] } } }</pre>
+        <p style="margin:8px 0 2px"><strong>Codex</strong>, or the ChatGPT desktop app in its Codex and Work modes</p>
+        <pre>codex mcp add wave -- /Applications/Wave.app/Contents/MacOS/wave mcp</pre>
+      </li>
+      <li>Keep Wave open, and ask.</li>
+    </ol>
+    <h3>Good to know</h3>
+    <ul>
+      <li>Agents work from the transcript, so their AI service sees that text. The audio stays on your Mac.</li>
+      <li>Agents can’t hear the audio. They judge from the words, their timing and the pauses, so give the result a listen.</li>
+      <li>ChatGPT in the browser can’t reach apps on your Mac, so it can’t use Wave.</li>
+    </ul>
+  </div>
+</dialog>
+
+<dialog class="panel" id="install" aria-labelledby="install-title">
+  <div class="panel-head"><h2 id="install-title">Install Wave</h2><button class="close" data-close aria-label="Close"><svg viewBox="0 0 16 16"><path d="M12.7 4.3l-1-1L8 7 4.3 3.3l-1 1L7 8l-3.7 3.7 1 1L8 9l3.7 3.7 1-1L9 8z"/></svg></button></div>
+  <div class="panel-body" tabindex="-1" autofocus>
+    <ul class="needs">
+      <li>A Mac with Apple Silicon (M1 or later)</li>
+      <li>macOS 13.4 (Ventura) or later</li>
+      <li>About 2 GB free for the speech models</li>
+      <li>An internet connection once, to download them</li>
+    </ul>
+    <h3>Steps</h3>
+    <ol>
+      <li><a data-download href="https://github.com/mskayyali/wave/releases/download/v1.1.0/Wave_1.1.0_aarch64.dmg">Download the DMG</a>, open it, and drag Wave into Applications.</li>
+      <li><strong>The first launch.</strong> Wave isn’t notarized by Apple yet, so the first time you open it, macOS stops it and says it can’t verify the developer. That’s expected:
+        <ol style="margin-top:8px">
+          <li>Click <strong>Done</strong>.</li>
+          <li>Open <strong>System Settings → Privacy &amp; Security</strong> and scroll down to the message about Wave.</li>
+          <li>Click <strong>Open Anyway</strong>, then <strong>Open</strong>.</li>
+        </ol>
+        <p style="margin:8px 0 2px">You only do this once, and updates don’t ask again. Or, in Terminal:</p>
+        <pre>xattr -dr com.apple.quarantine /Applications/Wave.app</pre>
+      </li>
+      <li>Click <strong>Set up transcription</strong> and download Transcription (1.6 GB). Clean-up (14 MB) and speaker detection (115 MB) are optional, in Settings.</li>
+      <li>Drop in a recording: MP3, WAV, M4A, FLAC and more.</li>
+    </ol>
+    <h3>Updates</h3>
+    <p>Wave 1.1 and later update themselves. Wave checks quietly, shows what’s new, and installs only when you choose. It never restarts without asking.</p>
+    <h3>Build it yourself</h3>
+    <p>The source and build steps are on <a href="https://github.com/mskayyali/wave#build-from-source">GitHub</a>.</p>
+  </div>
+</dialog>
+
+<dialog class="panel" id="credits" aria-labelledby="credits-title">
+  <div class="panel-head"><h2 id="credits-title">Credits</h2><button class="close" data-close aria-label="Close"><svg viewBox="0 0 16 16"><path d="M12.7 4.3l-1-1L8 7 4.3 3.3l-1 1L7 8l-3.7 3.7 1 1L8 9l3.7 3.7 1-1L9 8z"/></svg></button></div>
+  <div class="panel-body" tabindex="-1" autofocus>
+    <p>Wave is built by <a href="https://mskayyali.com">Saleh Kayyali</a> (<a href="https://x.com/mskayyali">@mskayyali</a>).</p>
+    <h3>Speech models</h3>
+    <ul>
+      <li><a href="https://github.com/ggml-org/whisper.cpp">Whisper</a> Large v3 Turbo by OpenAI, through whisper.cpp (MIT).</li>
+      <li><a href="https://huggingface.co/facebook/wav2vec2-base-960h">wav2vec2</a> by Meta, for word alignment (Apache-2.0).</li>
+      <li><a href="https://github.com/ceva-ip/DPDFNet">DPDFNet</a> by Ceva, for clean-up (Apache-2.0).</li>
+      <li><a href="https://huggingface.co/nvidia/Nemotron-3-Diarization">Nemotron 3 Diarization</a> by NVIDIA, for speakers (OpenMDW 1.1).</li>
+    </ul>
+    <h3>Audio</h3>
+    <p>MP3 export uses <a href="https://lame.sourceforge.io/">LAME</a> 3.100, bundled as a separate library under the LGPL. Its source is at <a href="https://sourceforge.net/projects/lame/files/lame/3.100/">sourceforge.net/projects/lame</a>.</p>
+    <h3>This page</h3>
+    <p>It loads nothing from anyone else. Its fonts are Fraunces and IBM Plex, under the SIL Open Font License (<a href="fonts/Fraunces-OFL.txt">Fraunces</a>, <a href="fonts/IBM-Plex-OFL.txt">IBM Plex</a>).</p>
+  </div>
+</dialog>
 
 <script>
-// The download buttons follow the latest release; the links above work if this can't run.
+// Panels: opened by any button with data-open, or by the address (#install).
+(() => {
+  const open = (id, section) => {
+    const d = document.getElementById(id);
+    if (!d || d.open) return;
+    document.querySelectorAll('dialog[open]').forEach((o) => o.close());
+    d.showModal();
+    const body = d.querySelector('.panel-body');
+    const target = section && document.getElementById(section);
+    body.scrollTop = target ? target.offsetTop - body.offsetTop - 12 : 0;
+    history.replaceState(null, '', '#' + id);
+  };
+  document.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => open(b.dataset.open, b.dataset.section)));
+  document.querySelectorAll('dialog.panel').forEach((d) => {
+    d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
+    d.addEventListener('close', () => { if (location.hash === '#' + d.id) history.replaceState(null, '', location.pathname); });
+    d.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => d.close()));
+  });
+  const fromHash = () => { const id = location.hash.slice(1); if (id) open(id); };
+  addEventListener('hashchange', fromHash);
+  fromHash();
+})();
+
+// The download links follow the latest release; the links as written work if this can't run.
 (async () => {
   try {
     const res = await fetch('https://api.github.com/repos/mskayyali/wave/releases/latest', { headers: { Accept: 'application/vnd.github+json' } });
@@ -504,42 +580,60 @@ footer a:hover { color: var(--text); }
   } catch { /* keep the links as written */ }
 })();
 
-// The demo: Wave's own welcome, a sentence edited in four moves.
+// The demo: a conversation edited, cleaned up and labelled, in Wave's own colours.
 (() => {
-  const line = document.getElementById('line');
+  const root = document.getElementById('turns');
   const statusEl = document.getElementById('status');
   const statusText = document.getElementById('status-text');
   const clock = document.getElementById('clock');
-  const WORDS = [
-    { text: 'So,' },
-    { pause: true },
-    { text: 'editing' }, { text: 'audio' }, { text: 'is' },
-    { text: 'um', key: 'um' },
-    { text: 'just' }, { text: 'editing' },
-    { text: 'tax.', key: 'tax' },
+  const TURNS = [
+    { who: 'Host', color: 'var(--host)', words: [
+      { text: 'So,' }, { pause: true },
+      { text: 'editing' }, { text: 'audio' }, { text: 'is' },
+      { text: 'um', key: 'um' }, { text: 'just' }, { text: 'editing' },
+      { text: 'tax.', key: 'tax' },
+    ] },
+    { who: 'Guest', color: 'var(--guest)', words: [
+      { text: 'Wait,' }, { text: 'that’s' }, { text: 'it?' },
+    ] },
   ];
-  const PAUSE_LONG = 3.2, PAUSE_SHORT = 1.3; // in em, as the pause's width
+  const PAUSE_LONG = 3.2, PAUSE_SHORT = 1.3; // in em, the pause's width
 
-  // Deterministic heights, so the waveform is the same on every visit.
-  let seed = 7;
+  let seed = 11;
   const rand = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
 
-  const toks = WORDS.map((w) => {
-    const tok = document.createElement('span');
-    tok.className = 'tok' + (w.pause ? ' pause' : '');
-    const word = document.createElement('span');
-    word.className = 'word';
-    word.textContent = w.pause ? '1.8 s' : w.text;
-    const wave = document.createElement('span');
-    wave.className = 'wave';
-    tok.append(word, wave);
-    line.append(tok);
-    return { ...w, tok, word, wave, heights: [] };
+  const toks = [];
+  const lines = TURNS.map((turn) => {
+    const el = document.createElement('div');
+    el.className = 'turn';
+    el.style.setProperty('--speaker', turn.color);
+    const who = document.createElement('div');
+    who.className = 'who';
+    who.textContent = turn.who;
+    const line = document.createElement('div');
+    line.className = 'line';
+    const hiss = document.createElement('div');
+    hiss.className = 'hiss';
+    line.append(hiss);
+    for (const w of turn.words) {
+      const tok = document.createElement('span');
+      tok.className = 'tok' + (w.pause ? ' pause' : '');
+      const word = document.createElement('span');
+      word.className = 'word';
+      word.textContent = w.pause ? '1.8 s' : w.text;
+      const wave = document.createElement('span');
+      wave.className = 'wave';
+      tok.append(word, wave);
+      line.append(tok);
+      toks.push({ ...w, tok, word, wave, heights: [] });
+    }
+    el.append(who, line);
+    root.append(el);
+    return { line, hiss };
   });
   const byKey = (k) => toks.find((t) => t.key === k);
   const pause = toks.find((t) => t.pause);
-
-  const fontPx = () => parseFloat(getComputedStyle(line).fontSize);
+  const fontPx = () => parseFloat(getComputedStyle(root).fontSize);
 
   function draw(t) {
     if (t.pause) return;
@@ -550,10 +644,19 @@ footer a:hover { color: var(--text); }
     while (t.heights.length < n) t.heights.push(0.3 + rand() * 0.7);
     t.wave.replaceChildren(...t.heights.slice(0, n).map((h, i) => {
       const b = document.createElement('b');
-      const envelope = 0.55 + 0.45 * Math.sin(Math.PI * (i + 0.5) / n);
-      b.style.setProperty('--h', Math.round(h * envelope * 100) + '%');
+      b.style.setProperty('--h', Math.round(h * (0.55 + 0.45 * Math.sin(Math.PI * (i + 0.5) / n)) * 100) + '%');
       return b;
     }));
+  }
+  function drawHiss() {
+    for (const { line, hiss } of lines) {
+      const n = Math.ceil(line.getBoundingClientRect().width / 4);
+      hiss.replaceChildren(...Array.from({ length: n }, () => {
+        const i = document.createElement('i');
+        i.style.setProperty('--h', Math.round(8 + rand() * 22) + '%');
+        return i;
+      }));
+    }
   }
   function setPause(em, label) {
     const px = em * fontPx();
@@ -564,6 +667,7 @@ footer a:hover { color: var(--text); }
   function layout() {
     toks.forEach(draw);
     setPause(pause.short ? PAUSE_SHORT : PAUSE_LONG, pause.short ? '0.4 s' : '1.8 s');
+    drawHiss();
   }
 
   function say(text) {
@@ -579,11 +683,11 @@ footer a:hover { color: var(--text); }
 
   function reset() {
     toks.forEach((t) => t.tok.classList.remove('sel', 'cut', 'gone', 'fixed', 'played'));
-    const tax = byKey('tax');
-    tax.word.textContent = 'tax.';
+    root.classList.remove('clean', 'speakers-on');
+    byKey('tax').word.textContent = 'tax.';
     pause.short = false;
     layout();
-    clock.textContent = '0:04.2';
+    clock.textContent = '0:05.1';
   }
   function finalState() {
     pause.short = true;
@@ -591,57 +695,64 @@ footer a:hover { color: var(--text); }
     const tax = byKey('tax');
     tax.word.textContent = 'text.';
     tax.tok.classList.add('fixed');
+    root.classList.add('clean', 'speakers-on');
     layout();
-    statusText.textContent = 'So, editing audio is just editing text.';
-    clock.textContent = '0:02.6';
+    statusText.textContent = 'Edited, cleaned up, and both speakers named.';
+    clock.textContent = '0:03.5';
   }
 
   async function play() {
     for (;;) {
       await whenVisible();
       say('Transcribed on your Mac');
-      await wait(1600);
+      await wait(1500);
       pause.tok.classList.add('sel');
       say('A long pause after “So,”, 1.8 seconds');
-      await wait(1300);
+      await wait(1200);
       pause.short = true;
       setPause(PAUSE_SHORT, '0.4 s');
       say('Shortened to 0.4 seconds');
-      clock.textContent = '0:02.8';
-      await wait(1000);
+      clock.textContent = '0:03.7';
+      await wait(950);
       pause.tok.classList.remove('sel');
       const um = byKey('um');
       um.tok.classList.add('sel');
       say('Select the filler and press <kbd>⌫</kbd>');
-      await wait(1300);
+      await wait(1200);
       um.tok.classList.remove('sel');
       um.tok.classList.add('cut');
       say('Cut from the audio');
-      await wait(750);
+      await wait(700);
       um.tok.classList.add('gone');
-      clock.textContent = '0:02.6';
-      await wait(1100);
+      clock.textContent = '0:03.5';
+      await wait(1000);
       const tax = byKey('tax');
       tax.tok.classList.add('sel');
       say('Misheard? Select it and press <kbd>↩</kbd>');
-      await wait(1300);
+      await wait(1200);
       tax.tok.classList.remove('sel');
       tax.word.textContent = 'text.';
       draw(tax);
       tax.tok.classList.add('fixed');
       say('Corrected');
-      await wait(1100);
+      await wait(1000);
+      root.classList.add('clean');
+      say('Clean up: the background hiss is gone');
+      await wait(1500);
+      root.classList.add('speakers-on');
+      say('Two speakers detected and named');
+      await wait(1500);
       say('▶ Playing the edit');
       for (const t of toks) {
         if (t.tok.classList.contains('gone')) continue;
         t.tok.classList.add('played');
-        await wait(t.pause ? 260 : 210);
+        await wait(t.pause ? 240 : 190);
       }
       await wait(2400);
-      line.classList.add('fading');
+      root.classList.add('fading');
       await wait(500);
       reset();
-      line.classList.remove('fading');
+      root.classList.remove('fading');
       await wait(500);
     }
   }
@@ -649,7 +760,7 @@ footer a:hover { color: var(--text); }
   const start = () => {
     layout();
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) { finalState(); return; }
-    new IntersectionObserver(([e]) => { visible = e.isIntersecting; }).observe(line);
+    new IntersectionObserver(([e]) => { visible = e.isIntersecting; }).observe(root);
     play();
   };
   let resizeTimer;

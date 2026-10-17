@@ -6,7 +6,7 @@
 
 ## Download
 
-**[Download Wave 1.0.0 for Mac](https://github.com/mskayyali/wave/releases/download/v1.0.0/Wave_1.0.0_aarch64.dmg)** (DMG, 17 MB). Earlier versions are on the [releases page](https://github.com/mskayyali/wave/releases), and there's a [website](https://mskayyali.github.io/wave/) too.
+**[Download Wave 1.1.0 for Mac](https://github.com/mskayyali/wave/releases/download/v1.1.0/Wave_1.1.0_aarch64.dmg)** (DMG, 19 MB). Earlier versions are on the [releases page](https://github.com/mskayyali/wave/releases), and there's a [website](https://mskayyali.github.io/wave/) too.
 
 ### What you need
 
