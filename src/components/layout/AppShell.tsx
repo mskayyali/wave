@@ -1,10 +1,14 @@
 import { FolderOpen, Settings } from '@carbon/icons-react';
+import { APP_VERSION } from '../../lib/appInfo';
+import { ActivityStatus } from './ActivityStatus';
 
 type Page = 'projects' | 'settings';
 
 interface SidebarProps {
   activePage: Page;
   onNavigate: (page: Page) => void;
+  /** Open About Wave. */
+  onAbout:    () => void;
 }
 
 const WaveformMark = () => (
@@ -23,12 +27,13 @@ const NAV_ITEMS: { id: Page; label: string; Icon: React.ComponentType<{ size: nu
   { id: 'settings', label: 'Settings',  Icon: Settings   },
 ];
 
-function Sidebar({ activePage, onNavigate }: SidebarProps) {
+function Sidebar({ activePage, onNavigate, onAbout }: SidebarProps) {
   return (
     <aside className="wave-sidebar">
-      <div className="wave-sidebar__logo">
+      {/* The window buttons sit at the left of this row; it moves the window. */}
+      <div className="wave-sidebar__logo" data-tauri-drag-region>
         <WaveformMark />
-        <span className="wave-sidebar__wordmark">wave</span>
+        <span className="wave-sidebar__wordmark">Wave</span>
       </div>
 
       <nav className="wave-sidebar__nav" aria-label="Main navigation">
@@ -45,7 +50,11 @@ function Sidebar({ activePage, onNavigate }: SidebarProps) {
         ))}
       </nav>
 
-      <div className="wave-sidebar__footer">v0.1.0</div>
+      <ActivityStatus placement="sidebar" />
+      <div className="wave-sidebar__footer">
+        <button type="button" className="wave-sidebar__about" onClick={onAbout}>About</button>
+        <span className="wave-sidebar__version">v{APP_VERSION}</span>
+      </div>
     </aside>
   );
 }
@@ -53,14 +62,19 @@ function Sidebar({ activePage, onNavigate }: SidebarProps) {
 interface AppShellProps {
   activePage: Page;
   onNavigate: (page: Page) => void;
+  onAbout:    () => void;
   children: React.ReactNode;
 }
 
-export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
+export function AppShell({ activePage, onNavigate, onAbout, children }: AppShellProps) {
   return (
     <div className="wave-shell">
-      <Sidebar activePage={activePage} onNavigate={onNavigate} />
-      <main className="wave-main">{children}</main>
+      <Sidebar activePage={activePage} onNavigate={onNavigate} onAbout={onAbout} />
+      <main className="wave-main">
+        {/* Under the hidden title bar: where the window is dragged from. */}
+        <div className="wave-titlebar" data-tauri-drag-region />
+        {children}
+      </main>
     </div>
   );
 }

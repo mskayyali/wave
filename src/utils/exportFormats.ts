@@ -1,16 +1,19 @@
 import type { TranscriptWord } from '../hooks/useTranscript';
 
+/** A word to export, with its speaker's name when speakers are shown. */
+export type ExportWord = TranscriptWord & { speaker?: string };
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const PARA_GAP_MS = 1500; // gap ≥ 1.5 s → new paragraph
 
-/** Group word array into paragraphs based on silence gaps. */
-function groupIntoParagraphs(words: TranscriptWord[]): TranscriptWord[][] {
+/** Group word array into paragraphs on silence gaps and speaker turns. */
+function groupIntoParagraphs(words: ExportWord[]): ExportWord[][] {
   if (words.length === 0) return [];
-  const paras: TranscriptWord[][] = [];
-  let current: TranscriptWord[] = [words[0]];
+  const paras: ExportWord[][] = [];
+  let current: ExportWord[] = [words[0]];
   for (let i = 1; i < words.length; i++) {
-    if (words[i].startMs - words[i - 1].endMs >= PARA_GAP_MS) {
+    if (words[i].startMs - words[i - 1].endMs >= PARA_GAP_MS || words[i].speaker !== words[i - 1].speaker) {
       paras.push(current);
       current = [];
     }
@@ -42,16 +45,16 @@ function pad3(n: number) { return String(n).padStart(3, '0'); }
 const CUE_GAP_MS  = 800;
 const MAX_WORDS   = 12;
 
-interface Cue { words: TranscriptWord[]; startMs: number; endMs: number }
+interface Cue { words: ExportWord[]; startMs: number; endMs: number }
 
-function buildCues(words: TranscriptWord[]): Cue[] {
+function buildCues(words: ExportWord[]): Cue[] {
   if (words.length === 0) return [];
   const cues: Cue[] = [];
-  let current: TranscriptWord[] = [words[0]];
+  let current: ExportWord[] = [words[0]];
 
   for (let i = 1; i < words.length; i++) {
     const gap = words[i].startMs - words[i - 1].endMs;
-    if (current.length >= MAX_WORDS || gap >= CUE_GAP_MS) {
+    if (current.length >= MAX_WORDS || gap >= CUE_GAP_MS || words[i].speaker !== words[i - 1].speaker) {
       cues.push({
         words:   current,
         startMs: current[0].startMs,
@@ -73,31 +76,44 @@ function buildCues(words: TranscriptWord[]): Cue[] {
 
 // ─── Exported generators ──────────────────────────────────────────────────────
 
-export function toPlainText(words: TranscriptWord[]): string {
+export function toPlainText(words: ExportWord[]): string {
+  let lastSpeaker: string | undefined;
   return groupIntoParagraphs(words)
-    .map((para) => para.map((w) => w.text).join(' '))
+    .map((para) => {
+      const text = para.map((w) => w.text).join(' ');
+      const speaker = para[0].speaker;
+      const label = speaker && speaker !== lastSpeaker ? `${speaker}: ` : '';
+      lastSpeaker = speaker;
+      return label + text;
+    })
     .join('\n\n');
 }
 
-export function toSRT(words: TranscriptWord[]): string {
+/** A cue's text, with "Name: " in front when the speaker changes. */
+function cueText(cue: Cue, previous: Cue | undefined): string {
+  const text = cue.words.map((w) => w.text).join(' ');
+  const speaker = cue.words[0].speaker;
+  return speaker && speaker !== previous?.words[0].speaker ? `${speaker}: ${text}` : text;
+}
+
+export function toSRT(words: ExportWord[]): string {
   return buildCues(words)
-    .map((cue, i) =>
-      `${i + 1}\n${toSRTTime(cue.startMs)} --> ${toSRTTime(cue.endMs)}\n` +
-      cue.words.map((w) => w.text).join(' ')
-    )
+    .map((cue, i, cues) => `${i + 1}\n${toSRTTime(cue.startMs)} --> ${toSRTTime(cue.endMs)}\n${cueText(cue, cues[i - 1])}`)
     .join('\n\n');
 }
 
-export function toVTT(words: TranscriptWord[]): string {
+/** WebVTT marks the speaker with a voice span: `<v Name>text`. */
+export function toVTT(words: ExportWord[]): string {
   const body = buildCues(words)
-    .map((cue) =>
-      `${toVTTTime(cue.startMs)} --> ${toVTTTime(cue.endMs)}\n` +
-      cue.words.map((w) => w.text).join(' ')
-    )
+    .map((cue) => {
+      const text = cue.words.map((w) => w.text).join(' ');
+      const speaker = cue.words[0].speaker;
+      return `${toVTTTime(cue.startMs)} --> ${toVTTTime(cue.endMs)}\n${speaker ? `<v ${speaker.replace(/>/g, '')}>${text}` : text}`;
+    })
     .join('\n\n');
   return `WEBVTT\n\n${body}`;
 }
 
-export function toJSON(words: TranscriptWord[], language: string, durationMs: number): string {
+export function toJSON(words: ExportWord[], language: string, durationMs: number): string {
   return JSON.stringify({ language, durationMs, words }, null, 2);
 }

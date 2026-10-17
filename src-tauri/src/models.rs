@@ -9,22 +9,84 @@ use tokio::io::AsyncWriteExt;
 
 // ─── Model catalog ────────────────────────────────────────────────────────────
 
-const HF_BASE: &str =
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
-
 struct ModelSpec {
-    id: &'static str,
+    id:       &'static str,
     filename: &'static str,
+    url:      &'static str,
+    /// Small files the main one needs beside it, `(filename, url)`: an ONNX
+    /// graph whose weights are the main file. Fetched first, needed for Ready,
+    /// deleted with it.
+    companions: &'static [(&'static str, &'static str)],
 }
 
+/// The forced-alignment model (wav2vec2-base-960h, int8 ONNX, Apache-2.0). It
+/// places every word on the audio it was spoken in; see alignment.rs.
+pub const ALIGNER_ID: &str = "wav2vec2-align-en";
+const ALIGNER_FILENAME: &str = "wav2vec2-base-960h-int8.onnx";
+
+
+/// Speech enhancement's clean-up: DPDFNet by Ceva (Apache-2.0), the 8-block
+/// 48 kHz model pinned to a Hugging Face revision (dpdfnet.rs runs it).
+pub const DPDFNET_ID: &str = "dpdfnet";
+
+/// Speaker detection: NVIDIA Nemotron 3 Diarization (OpenMDW 1.1), the int8
+/// ONNX export from onnx-community, pinned to a commit. The weights are the
+/// main file; the graph that loads them is a companion. See speakers.rs.
+pub const DIARIZATION_ID: &str = "nemotron3-diarization";
+const DIARIZATION_GRAPH: &str = "nemotron3-diarization-353b6f8/model_quantized.onnx";
+
+/// Wave ships one model: Large v3 Turbo. Text-based editing needs both accurate
+/// words and accurate word timings, and Turbo is the best fit on Apple Silicon:
+/// near-Large-v3 accuracy at a fraction of the time, with a DTW alignment preset
+/// (see `dtw_preset_for` in transcription.rs). Smaller models trade away word
+/// accuracy; Large v3 is ~2× the size and much slower for no timing benefit.
+/// If a model is added back, give it a DTW preset too and a MODEL_CATALOG entry
+/// in src/lib/modelCatalog.ts. The other entries are the word-alignment,
+/// clean-up and speaker-detection models.
 const KNOWN_MODELS: &[ModelSpec] = &[
-    ModelSpec { id: "tiny.en",          filename: "ggml-tiny.en.bin"          },
-    ModelSpec { id: "base.en",          filename: "ggml-base.en.bin"          },
-    ModelSpec { id: "small.en",         filename: "ggml-small.en.bin"         },
-    ModelSpec { id: "medium.en",        filename: "ggml-medium.en.bin"        },
-    ModelSpec { id: "large-v3-turbo",   filename: "ggml-large-v3-turbo.bin"   },
-    ModelSpec { id: "large-v3",         filename: "ggml-large-v3.bin"         },
+    ModelSpec {
+        id:       "large-v3-turbo",
+        filename: "ggml-large-v3-turbo.bin",
+        url:      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+        companions: &[],
+    },
+    ModelSpec {
+        id:       ALIGNER_ID,
+        filename: ALIGNER_FILENAME,
+        url:      "https://huggingface.co/onnx-community/wav2vec2-base-960h-ONNX/resolve/main/onnx/model_int8.onnx",
+        companions: &[],
+    },
+    ModelSpec {
+        id:       DPDFNET_ID,
+        filename: "dpdfnet8_48khz_hr-dd6818d.onnx",
+        url:      "https://huggingface.co/Ceva-IP/DPDFNet/resolve/dd6818d00f50c836fed43a6243ebe49116de5964/onnx/dpdfnet8_48khz_hr.onnx",
+        companions: &[],
+    },
+    ModelSpec {
+        id:       DIARIZATION_ID,
+        filename: "nemotron3-diarization-353b6f8/model_quantized.onnx_data",
+        url:      "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/353b6f8ad2cac3580e982d7fbdf0a010786b0406/onnx/model_quantized.onnx_data",
+        companions: &[(
+            DIARIZATION_GRAPH,
+            "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/353b6f8ad2cac3580e982d7fbdf0a010786b0406/onnx/model_quantized.onnx",
+        )],
+    },
 ];
+
+/// Downloads of models Wave no longer uses, removed at launch: Clear and Uhm
+/// (Desert Ant Labs, under a licence that isn't open source). DPDFNet does
+/// Clear's job; agents find fillers from the sounds between words instead.
+const RETIRED_FILES: &[&str] = &["clear-studio-v0.3.0.onnx", "clear-natural-v0.3.0.onnx", "uhm-v1.1.0.onnx"];
+
+/// Delete retired models' files (and any half-finished downloads of them).
+pub fn remove_retired(app: &AppHandle) {
+    let Ok(dir) = models_dir(app) else { return };
+    for name in RETIRED_FILES {
+        for path in [dir.join(name), dir.join(format!("{name}.part"))] {
+            if path.exists() { let _ = std::fs::remove_file(&path); }
+        }
+    }
+}
 
 fn spec_for(model_id: &str) -> Option<&'static ModelSpec> {
     KNOWN_MODELS.iter().find(|m| m.id == model_id)
@@ -87,6 +149,30 @@ impl DownloadManager {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/// Path to the installed forced-alignment model, if it has been downloaded.
+pub fn aligner_path(app: &AppHandle) -> Option<PathBuf> {
+    let path = models_dir(app).ok()?.join(ALIGNER_FILENAME);
+    path.exists().then_some(path)
+}
+
+/// Any known model's installed file, if downloaded.
+pub fn installed_model_path(app: &AppHandle, model_id: &str) -> Option<PathBuf> {
+    let spec = spec_for(model_id)?;
+    let dir  = models_dir(app).ok()?;
+    let path = dir.join(spec.filename);
+    (path.exists() && companions_present(&dir, spec)).then_some(path)
+}
+
+/// The speaker-detection graph (it loads its weights from beside it), if downloaded.
+pub fn diarization_model_path(app: &AppHandle) -> Option<PathBuf> {
+    installed_model_path(app, DIARIZATION_ID)?;
+    Some(models_dir(app).ok()?.join(DIARIZATION_GRAPH))
+}
+
+fn companions_present(dir: &std::path::Path, spec: &ModelSpec) -> bool {
+    spec.companions.iter().all(|(name, _)| dir.join(name).exists())
+}
+
 pub fn models_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -111,7 +197,7 @@ fn format_download_error(e: &reqwest::Error) -> String {
 
 // ─── Tauri commands ───────────────────────────────────────────────────────────
 
-/// Return the status of every known model. Always returns all 6 entries.
+/// Return the status of every known model (one entry per `KNOWN_MODELS`).
 #[tauri::command]
 pub fn list_models(
     app: AppHandle,
@@ -129,7 +215,7 @@ pub fn list_models(
 
             let status = if is_active {
                 ModelStatus::Downloading
-            } else if final_path.exists() {
+            } else if final_path.exists() && companions_present(&dir, spec) {
                 let size = std::fs::metadata(&final_path)
                     .map(|m| m.len())
                     .unwrap_or(0);
@@ -172,9 +258,16 @@ pub async fn start_model_download(
     let final_path = dir.join(spec.filename);
     let part_path  = dir.join(format!("{}.part", spec.filename));
 
-    if final_path.exists() {
+    if final_path.exists() && companions_present(&dir, spec) {
         return Err("already_downloaded".to_string());
     }
+    if let Some(parent) = final_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let companions: Vec<(PathBuf, String)> = spec.companions.iter()
+        .map(|(name, url)| (dir.join(name), url.to_string()))
+        .filter(|(path, _)| !path.exists())
+        .collect();
 
     {
         let active = state.cancellers.lock().unwrap();
@@ -190,19 +283,20 @@ pub async fn start_model_download(
         active.insert(model_id.clone(), cancel_flag.clone());
     }
 
-    let url         = format!("{}/{}", HF_BASE, spec.filename);
+    let url         = spec.url.to_string();
     let app_clone   = app.clone();
     let mid         = model_id.clone();
 
     tokio::spawn(async move {
-        let result = do_download(
-            app_clone.clone(),
-            mid.clone(),
-            url,
-            part_path,
-            final_path,
-            cancel_flag,
-        )
+        let result = async {
+            for (path, url) in &companions {
+                fetch_small(url, path).await?;
+            }
+            if final_path.exists() {
+                return Ok(());
+            }
+            do_download(app_clone.clone(), mid.clone(), url, part_path, final_path, cancel_flag).await
+        }
         .await;
 
         // Always clean up the canceller entry
@@ -266,8 +360,27 @@ pub fn delete_model(app: AppHandle, model_id: String) -> Result<(), String> {
         std::fs::remove_file(&part_path).map_err(|e| e.to_string())?;
         deleted = true;
     }
+    for (name, _) in spec.companions {
+        let companion = dir.join(name);
+        if companion.exists() {
+            std::fs::remove_file(&companion).map_err(|e| e.to_string())?;
+            deleted = true;
+        }
+    }
 
     if deleted { Ok(()) } else { Err("file_not_found".to_string()) }
+}
+
+/// Fetch a small companion file whole (no progress or resume), via a `.part`.
+async fn fetch_small(url: &str, path: &std::path::Path) -> Result<(), String> {
+    let response = reqwest::get(url).await.map_err(|e| format_download_error(&e))?;
+    if !response.status().is_success() {
+        return Err(format!("Server returned HTTP {}", response.status().as_u16()));
+    }
+    let bytes = response.bytes().await.map_err(|e| format!("Download interrupted: {e}"))?;
+    let part = path.with_extension("part");
+    tokio::fs::write(&part, &bytes).await.map_err(|e| format!("Write error: {e}"))?;
+    tokio::fs::rename(&part, path).await.map_err(|e| e.to_string())
 }
 
 // ─── Core download logic ──────────────────────────────────────────────────────

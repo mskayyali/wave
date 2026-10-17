@@ -1,5 +1,9 @@
 // Carbon Design System — g100 dark theme applied via React Theme component
 @use '@carbon/react';
+// Carbon's type, spacing and theme tokens, for the components built from Carbon parts.
+@use '@carbon/react/scss/type';
+@use '@carbon/react/scss/spacing';
+@use '@carbon/react/scss/theme';
 
 // ─── Wave custom tokens ───────────────────────────────────────────────────────
 :root {
@@ -14,8 +18,16 @@
   --wave-text-primary:     #f4f4f4;   // headings, names, strong values
   --wave-text-secondary:   #c6c6c6;   // body copy, descriptions
   --wave-text-tertiary:    #8d8d8d;   // supporting info, meta, size labels
-  --wave-text-muted:       #6f6f6f;   // captions, requirements, dim labels
-  --wave-text-faint:       #525252;   // dividers, placeholders, version
+  // Muted and faint are text too, so they keep 4.5:1 on the backgrounds.
+  --wave-text-muted:       #8d8d8d;   // captions, requirements, dim labels
+  --wave-text-faint:       #808080;   // dates, totals, the version
+  // The hidden title bar: macOS keeps the window buttons in a 28 pt band at the
+  // top left (it ignores a custom position once the window shows), so Wave's
+  // top edge is laid out around them: a band this tall, room this wide.
+  --wave-titlebar-height:  28px;
+  --wave-titlebar-inset:   80px;
+  // Fraunces (SIL OFL) is the brand voice: the wordmark and display headings.
+  --wave-font-display:     'Fraunces Variable', 'Iowan Old Style', Georgia, serif;
 }
 
 // ─── Base reset ───────────────────────────────────────────────────────────────
@@ -67,16 +79,23 @@ body {
 .wave-sidebar__logo {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 18px 16px 16px;
-  border-bottom: 1px solid var(--wave-sidebar-border);
+  gap: 8px;
+  // Centred on the window buttons beside it.
+  height: var(--wave-titlebar-height);
+  margin-bottom: 12px;
+  padding: 0 16px 0 var(--wave-titlebar-inset);
+  // The whole row moves the window, so its contents don't take the press.
+  > * { pointer-events: none; }
+
+  svg { height: 14px; width: auto; }
 }
 
 .wave-sidebar__wordmark {
-  font-family: 'IBM Plex Mono', 'Courier New', monospace;
-  font-size: 15px;
+  font-family: var(--wave-font-display);
+  font-size: 18px;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  font-variation-settings: 'SOFT' 100, 'WONK' 0, 'opsz' 24;
+  letter-spacing: -0.01em;
   color: #f4f4f4;
   line-height: 1;
 }
@@ -113,7 +132,8 @@ body {
     color: #c6c6c6;
   }
 
-  &--active {
+  // Doubled so it outranks :hover: the current page stays marked under the pointer.
+  &--active#{&}--active {
     border-left-color: var(--wave-accent);
     color: #f4f4f4;
     background: var(--wave-accent-subtle);
@@ -124,14 +144,445 @@ body {
   }
 }
 
+// About on the left, the version on the right.
 .wave-sidebar__footer {
-  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
   border-top: 1px solid var(--wave-sidebar-border);
+}
+
+.wave-sidebar__about {
+  margin-inline-start: -4px;
+  padding: 4px;
+  border: none;
+  border-radius: 2px;
+  background: none;
+  color: #8d8d8d;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 120ms ease;
+
+  &:hover { color: theme.$text-primary; }
+  &:focus-visible { outline: 2px solid theme.$focus; outline-offset: -2px; }
+}
+
+.wave-sidebar__version {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 11px;
   color: var(--wave-text-faint);
   letter-spacing: 0.04em;
 }
+
+// ─── Progress ─────────────────────────────────────────────────────────────────
+// Progress reads in the accent everywhere, like the playhead: Carbon's bars
+// (they fill with --cds-interactive), the activity ring and the project cards.
+// Finished and failed bars keep Carbon's green and red.
+.cds--progress-bar { --cds-interactive: var(--wave-accent); }
+
+// ─── Activity status (ActivityStatus) ────────────────────────────────────────
+// What's running in the background: one line in the editor's top bar or at
+// the foot of the sidebar, opening the list of every job.
+
+.wave-activity__trigger {
+  @include type.type-style('body-compact-01');
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-03;
+  max-width: 100%;
+  min-height: spacing.$spacing-07;
+  padding: 0 spacing.$spacing-03;
+  border: 0;
+  background: transparent;
+  color: theme.$text-secondary;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover { background: theme.$layer-hover-01; color: theme.$text-primary; }
+  &:focus-visible { outline: 2px solid theme.$focus; outline-offset: -2px; }
+}
+
+.wave-activity__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.wave-activity__label,
+.wave-activity__subject {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.wave-activity__subject {
+  @include type.type-style('label-01');
+  color: theme.$text-helper;
+}
+
+.wave-activity__pct {
+  @include type.type-style('code-01');
+  flex-shrink: 0;
+  color: theme.$text-helper;
+}
+
+.wave-activity__more { flex-shrink: 0; margin: 0; }
+
+// The job's icon in a ring of its progress, in the accent like the playhead.
+// The finished states (a check, a warning) take the same 24 px.
+.wave-activity__badge {
+  position: relative;
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  color: theme.$text-primary;
+
+  .wave-job-icon { grid-area: 1 / 1; }
+}
+
+.wave-activity__ring {
+  position: absolute;
+  inset: 0;
+  transform: rotate(-90deg);
+}
+.wave-activity__ring-track { fill: none; stroke: theme.$border-subtle-01; stroke-width: 1.5; }
+.wave-activity__ring-value {
+  fill: none;
+  stroke: var(--wave-accent);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  transition: stroke-dasharray 300ms ease-out;
+}
+// No telling how far along: a quarter arc goes round.
+.wave-activity__ring--busy { animation: wave-ring-turn 1.1s linear infinite; }
+@keyframes wave-ring-turn {
+  from { transform: rotate(-90deg); }
+  to   { transform: rotate(270deg); }
+}
+
+.wave-activity__icon { flex-shrink: 0; margin: 2px; }
+.wave-activity__icon--done  { fill: theme.$support-success; }
+.wave-activity__icon--error { fill: theme.$support-error; }
+
+.wave-activity__item-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: theme.$text-secondary;
+}
+
+.wave-activity--toolbar .wave-activity__trigger { max-width: 18rem; }
+
+.wave-activity--sidebar {
+  display: block;
+  border-top: 1px solid var(--wave-sidebar-border);
+
+  .wave-activity__trigger {
+    width: 100%;
+    padding: spacing.$spacing-03 spacing.$spacing-05;
+  }
+}
+
+.wave-activity__panel {
+  width: 20rem;
+  padding: spacing.$spacing-05;
+}
+
+.wave-activity__heading {
+  @include type.type-style('heading-compact-01');
+  margin-bottom: spacing.$spacing-05;
+  color: theme.$text-primary;
+}
+
+.wave-activity__list {
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-05;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wave-activity__item {
+  display: flex;
+  align-items: flex-start;
+  gap: spacing.$spacing-03;
+
+  .cds--progress-bar { flex: 1; min-width: 0; }
+  .cds--progress-bar__label-text { white-space: normal; }
+  .cds--progress-bar__helper-text { overflow-wrap: anywhere; }
+}
+
+.wave-activity__action { flex-shrink: 0; }
+
+// ─── Job icons (JobIcon) ──────────────────────────────────────────────────────
+// Each kind of background job moves its own way. Parts are numbered (`--n`) to
+// stagger them; transforms are in the icon's 256-unit grid. At rest for
+// finished jobs and with reduced motion.
+
+.wave-job-icon {
+  flex-shrink: 0;
+  overflow: visible;
+
+  path { transform-box: fill-box; transform-origin: center; }
+}
+
+// Transcribing: the caption lines type themselves out, then start over.
+.wave-job-icon--transcribe .wave-job-icon__line {
+  transform-origin: left center;
+  animation: wave-job-type 2.4s calc(var(--n) * 0.28s) cubic-bezier(0.3, 0, 0.2, 1) infinite;
+}
+@keyframes wave-job-type {
+  0%       { transform: scaleX(0); opacity: 0; }
+  12%      { opacity: 1; }
+  30%, 80% { transform: scaleX(1); opacity: 1; }
+  95%, 100% { transform: scaleX(1); opacity: 0; }
+}
+
+// Importing: the sound wave pulses out of the file.
+.wave-job-icon--import .wave-job-icon__wave { animation: wave-job-pulse 1.2s ease-in-out infinite; }
+@keyframes wave-job-pulse {
+  0%, 100% { opacity: 0.25; transform: translateX(-10px); }
+  50%      { opacity: 1;    transform: translateX(0); }
+}
+
+// Downloading: the arrow drops into the tray.
+.wave-job-icon--download .wave-job-icon__arrow { animation: wave-job-drop 1.4s cubic-bezier(0.5, 0, 0.3, 1) infinite; }
+@keyframes wave-job-drop {
+  0%       { transform: translateY(-56px); opacity: 0; }
+  35%, 70% { transform: translateY(0); opacity: 1; }
+  100%     { transform: translateY(28px); opacity: 0; }
+}
+
+// Exporting: the arrow rises out of the box.
+.wave-job-icon--export .wave-job-icon__arrow { animation: wave-job-rise 1.4s cubic-bezier(0.5, 0, 0.3, 1) infinite; }
+@keyframes wave-job-rise {
+  0%       { transform: translateY(40px); opacity: 0; }
+  35%, 70% { transform: translateY(0); opacity: 1; }
+  100%     { transform: translateY(-32px); opacity: 0; }
+}
+
+
+// Detecting speakers: the voice's waves, near then far.
+.wave-job-icon--speakers .wave-job-icon__wave { animation: wave-job-call 1.4s calc(var(--n) * 0.2s) ease-in-out infinite; }
+@keyframes wave-job-call {
+  0%, 100% { opacity: 0.15; }
+  40%      { opacity: 1; }
+}
+
+// Enhancing: the star breathes, the small ones twinkle in turn.
+.wave-job-icon--enhance .wave-job-icon__star { animation: wave-job-breathe 1.6s ease-in-out infinite; }
+.wave-job-icon--enhance .wave-job-icon__twinkle { animation: wave-job-twinkle 1.6s calc(var(--n) * 0.8s + 0.4s) ease-in-out infinite; }
+@keyframes wave-job-breathe {
+  0%, 100% { transform: scale(0.86); }
+  50%      { transform: scale(1); }
+}
+@keyframes wave-job-twinkle {
+  0%, 100% { transform: scale(0.2) rotate(0deg); opacity: 0; }
+  40%      { transform: scale(1) rotate(45deg); opacity: 1; }
+  70%      { transform: scale(0.9) rotate(90deg); opacity: 0.8; }
+}
+
+// Re-aligning words: the arrows nudge in to the line.
+.wave-job-icon--realign .wave-job-icon__left  { animation: wave-job-in-left 1.2s ease-in-out infinite; }
+.wave-job-icon--realign .wave-job-icon__right { animation: wave-job-in-right 1.2s ease-in-out infinite; }
+@keyframes wave-job-in-left  { 0%, 100% { transform: translateX(-14px); } 50% { transform: translateX(6px); } }
+@keyframes wave-job-in-right { 0%, 100% { transform: translateX(14px); }  50% { transform: translateX(-6px); } }
+
+// Preparing the waveform, or playback: the bars bounce like a level meter.
+.wave-job-icon--waveform .wave-job-icon__bar,
+.wave-job-icon--playback .wave-job-icon__bar {
+  animation: wave-job-level 1s calc(var(--n) * -0.37s) ease-in-out infinite alternate;
+}
+@keyframes wave-job-level {
+  from { transform: scaleY(0.35); }
+  to   { transform: scaleY(1); }
+}
+
+// Anything else: turning.
+.wave-job-icon--other .wave-job-icon__spin { animation: wave-job-spin 0.9s linear infinite; }
+@keyframes wave-job-spin { to { transform: rotate(360deg); } }
+
+// `path[class]` outranks the kinds' rules above.
+.wave-job-icon--still path[class] { animation: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wave-job-icon path[class],
+  .wave-activity__ring--busy { animation: none; }
+}
+
+// ─── AI agents (Settings) ─────────────────────────────────────────────────────
+
+.wave-agents__title {
+  @include type.type-style('heading-compact-01');
+  margin-bottom: spacing.$spacing-03;
+  color: theme.$text-primary;
+}
+
+.wave-agents__note {
+  @include type.type-style('body-compact-01');
+  margin-bottom: spacing.$spacing-03;
+  color: theme.$text-secondary;
+
+  code { @include type.type-style('code-01'); color: theme.$text-primary; }
+}
+
+.wave-agents__client .cds--snippet { max-width: none; }
+
+// The agent that made an edit (Edits list).
+.wave-edit-agent.cds--tag { margin: 0 spacing.$spacing-03 0 0; }
+
+// ─── Focus ────────────────────────────────────────────────────────────────────
+// The hand-built controls show Carbon's focus ring for keyboard focus only.
+.wave-view-btn,
+.wave-playback__seek-btn,
+.wave-playback__play-btn,
+.wave-playback__speed-btn,
+.wave-sidebar__nav-item {
+  &:focus { outline: none; }
+  &:focus-visible { outline: 2px solid theme.$focus; outline-offset: -2px; }
+}
+
+// ─── Drag and drop ────────────────────────────────────────────────────────────
+
+.wave-drop {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  padding: spacing.$spacing-05;
+  background: rgba(22, 22, 22, 0.85);
+  pointer-events: none;
+}
+
+.wave-drop__frame {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: spacing.$spacing-03;
+  height: 100%;
+  border: 2px dashed var(--wave-accent);
+  border-radius: 8px;
+  background: var(--wave-accent-subtle);
+}
+
+.wave-drop__icon { fill: var(--wave-accent); }
+
+.wave-drop__title {
+  @include type.type-style('heading-03');
+  margin: 0;
+  color: theme.$text-primary;
+}
+
+.wave-drop__hint {
+  @include type.type-style('body-compact-01');
+  margin: 0;
+  color: theme.$text-secondary;
+}
+
+.wave-drop--none {
+  .wave-drop__frame { border-color: theme.$border-strong-01; background: transparent; }
+  .wave-drop__icon { fill: theme.$icon-secondary; }
+}
+
+// ─── The editor without a transcript (ProjectStatus) ──────────────────────────
+
+.wave-project-status {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: spacing.$spacing-05;
+  max-width: 28rem;
+  margin: 0 auto;
+  padding: spacing.$spacing-07;
+  text-align: center;
+}
+
+.wave-project-status__icon { fill: theme.$support-warning; }
+
+.wave-project-status__title {
+  @include type.type-style('heading-03');
+  margin: 0;
+  color: theme.$text-primary;
+}
+
+.wave-project-status__body {
+  @include type.type-style('body-01');
+  margin: 0;
+  color: theme.$text-secondary;
+  overflow-wrap: anywhere;
+}
+
+.wave-project-status__progress { width: 100%; text-align: left; }
+
+// ─── Find bar and the first-time hint (above the transcript) ─────────────────
+
+.wave-editor-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.wave-find {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-02;
+  padding: spacing.$spacing-03 spacing.$spacing-05;
+  background: theme.$layer-01;
+  border-bottom: 1px solid theme.$border-subtle-01;
+
+  .cds--search { flex: 1; max-width: 24rem; }
+}
+
+.wave-find__count {
+  @include type.type-style('code-01');
+  min-width: 6.5rem;
+  padding: 0 spacing.$spacing-03;
+  color: theme.$text-helper;
+}
+
+.wave-find__count--none { color: theme.$text-error; }
+
+.wave-editor-hint.cds--inline-notification {
+  max-width: none;
+  margin: 0;
+}
+
+// ─── Crash screen (ErrorBoundary) ─────────────────────────────────────────────
+
+.wave-crash {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: spacing.$spacing-05;
+  min-height: 100vh;
+  padding: spacing.$spacing-09;
+  background: #161616;
+  text-align: center;
+}
+
+.wave-crash__icon { fill: theme.$support-warning; }
+
+.wave-crash__title {
+  @include type.type-style('heading-04');
+  margin: 0;
+  color: theme.$text-primary;
+}
+
+.wave-crash__body {
+  @include type.type-style('body-01');
+  max-width: 32rem;
+  margin: 0;
+  color: theme.$text-secondary;
+}
+
+.wave-crash__details.cds--snippet { width: min(40rem, 90vw); max-width: none; text-align: left; }
 
 // ─── Main content ─────────────────────────────────────────────────────────────
 .wave-main {
@@ -148,7 +599,32 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 32px 40px;
+  padding: 8px 40px 32px;
+}
+
+// Under the hidden title bar on the Projects and Settings pages: the strip
+// the window is dragged by. Sticky, so content scrolls beneath it.
+.wave-titlebar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex-shrink: 0;
+  height: var(--wave-titlebar-height);
+  background: #161616;
+}
+
+// Full screen hides the window buttons: no room kept for them, no band.
+body.wave-fullscreen {
+  --wave-titlebar-inset: 16px;
+
+  .wave-titlebar, .wave-window-band { height: 0; }
+}
+
+// The editor's band above its top bar, where the window buttons sit.
+.wave-window-band {
+  flex-shrink: 0;
+  height: var(--wave-titlebar-height);
+  background: #0f0f0f;
 }
 
 .wave-page__header {
@@ -156,9 +632,11 @@ body {
 }
 
 .wave-page__title {
-  font-family: 'IBM Plex Sans', 'Helvetica Neue', sans-serif;
-  font-size: 20px;
-  font-weight: 400;
+  font-family: var(--wave-font-display);
+  font-size: 28px;
+  font-weight: 500;
+  font-variation-settings: 'SOFT' 60, 'WONK' 0, 'opsz' 48;
+  line-height: 1.15;
   color: #f4f4f4;
   letter-spacing: 0;
   margin: 0 0 4px;
@@ -181,55 +659,136 @@ body {
   padding: 60px 0;
 }
 
-.wave-empty-state__icon {
-  color: #3d3d3d;
-  opacity: 0.9;
+// ─── Welcome (the empty Projects page) ────────────────────────────────────────
+// The brand moment (BrandHero), a greeting in Fraunces, the three first-run
+// steps in a row (a rule over each fills in as it's reached), one action.
+
+.wave-welcome {
+  gap: spacing.$spacing-05;
+  padding: spacing.$spacing-03 0 spacing.$spacing-06;
 }
 
-.wave-empty-state__waveform {
+.wave-hero {
   display: block;
-
-  rect {
-    transform-origin: center;
-    animation: wave-idle 2.4s ease-in-out infinite;
-    fill: #3d3d3d;
-  }
-
-  rect:nth-child(1)  { animation-delay: 0.00s; }
-  rect:nth-child(2)  { animation-delay: 0.10s; }
-  rect:nth-child(3)  { animation-delay: 0.20s; }
-  rect:nth-child(4)  { animation-delay: 0.30s; }
-  rect:nth-child(5)  { animation-delay: 0.15s; }
-  rect:nth-child(6)  { animation-delay: 0.25s; }
-  rect:nth-child(7)  { animation-delay: 0.05s; }
-  rect:nth-child(8)  { animation-delay: 0.35s; }
-  rect:nth-child(9)  { animation-delay: 0.18s; }
-  rect:nth-child(10) { animation-delay: 0.28s; }
-  rect:nth-child(11) { animation-delay: 0.08s; }
-  rect:nth-child(12) { animation-delay: 0.22s; }
+  width: min(54rem, 100%);
+  height: auto;
 }
 
-@keyframes wave-idle {
-  0%, 100% { transform: scaleY(1); }
-  50%       { transform: scaleY(0.45); }
+.wave-hero__word {
+  font-family: var(--wave-font-display);
+  font-size: 46px;
+  font-weight: 500;
+  font-variation-settings: 'SOFT' 100, 'WONK' 0;
 }
 
-.wave-empty-state__heading {
+.wave-hero__pause {
+  @include type.type-style('code-01');
+  font-size: 12px;
+}
+
+.wave-hero__key {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 16px;
+  fill: theme.$text-primary;
+}
+
+.wave-hero__chip {
   font-family: 'IBM Plex Sans', sans-serif;
-  font-size: 18px;
-  font-weight: 300;
-  color: var(--wave-text-tertiary);
-  margin: 0;
-  letter-spacing: 0.01em;
+  font-size: 15px;
+  font-weight: 500;
 }
 
-.wave-empty-state__body {
-  font-size: 13px;
-  color: var(--wave-text-muted);
-  margin: -8px 0 0;
-  text-align: center;
-  max-width: 280px;
-  line-height: 1.5;
+.wave-welcome__title {
+  margin: 0;
+  font-family: var(--wave-font-display);
+  font-size: 28px;
+  font-weight: 500;
+  font-variation-settings: 'SOFT' 100, 'WONK' 1, 'opsz' 72;
+  line-height: 1.1;
+  color: theme.$text-primary;
+}
+
+.wave-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: spacing.$spacing-05;
+  width: min(46rem, 100%);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wave-steps__step {
+  display: flex;
+  gap: spacing.$spacing-03;
+  padding-top: spacing.$spacing-04;
+  border-top: 2px solid theme.$border-subtle-01;
+  animation: wave-rise 480ms cubic-bezier(0.2, 0, 0.2, 1) both;
+}
+
+.wave-steps__step--done    { border-top-color: theme.$support-success; }
+.wave-steps__step--current { border-top-color: var(--wave-accent); }
+
+.wave-steps__mark {
+  @include type.type-style('code-01');
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-top: 1px;
+  border: 1px solid theme.$border-strong-01;
+  border-radius: 50%;
+  color: theme.$text-secondary;
+}
+
+.wave-steps__step--current .wave-steps__mark {
+  border-color: var(--wave-accent);
+  color: var(--wave-accent);
+}
+
+.wave-steps__step--done .wave-steps__mark {
+  border: 0;
+  svg { fill: theme.$support-success; }
+}
+
+.wave-steps__text {
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-01;
+  min-width: 0;
+}
+
+.wave-steps__title {
+  @include type.type-style('heading-compact-01');
+  color: theme.$text-primary;
+}
+
+.wave-steps__step--next .wave-steps__title { color: theme.$text-secondary; }
+
+.wave-steps__body {
+  @include type.type-style('helper-text-01');
+  color: theme.$text-secondary;
+}
+
+.wave-welcome__action {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-05;
+}
+
+.wave-welcome__hint {
+  @include type.type-style('body-compact-01');
+  color: theme.$text-secondary;
+}
+
+@keyframes wave-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wave-steps__step { animation: none; }
 }
 
 // ─── Page header row ─────────────────────────────────────────────────────────
@@ -289,31 +848,17 @@ body {
   gap: 6px;
 }
 
-.wave-project-card__delete-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  border-radius: 2px;
-  background: transparent;
-  color: var(--wave-text-faint);
-  cursor: pointer;
+.wave-project-card__status.cds--tag { margin: 0; }
+
+// Delete (a Carbon IconButton): shown on hover or keyboard focus, red when pointed at.
+.wave-project-card__delete {
   opacity: 0;
-  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
 
-  svg { fill: currentColor; }
-
-  &:hover {
-    color: #fa4d56;
-    background: rgba(250, 77, 86, 0.12);
-  }
+  &:hover svg { fill: theme.$support-error; }
 }
 
-// Show delete button on card hover
-.wave-project-card:hover .wave-project-card__delete-btn {
+.wave-project-card:hover .wave-project-card__delete,
+.wave-project-card__delete:focus {
   opacity: 1;
 }
 
@@ -335,13 +880,6 @@ body {
   color: var(--wave-text-primary);
   margin: 0 0 4px;
   line-height: 1.3;
-}
-
-.wave-project-card__status-icon {
-  flex-shrink: 0;
-
-  &--ok  { fill: var(--wave-accent); }
-  &--err { fill: #fa4d56; }
 }
 
 .wave-project-card__filename {
@@ -380,9 +918,6 @@ body {
   background: var(--wave-accent);
   transition: width 300ms ease;
 
-  &--transcribing {
-    background: #3ddbd9; // teal for transcription
-  }
 }
 
 .wave-project-card__import-pct {
@@ -391,6 +926,20 @@ body {
   color: var(--wave-accent);
   align-self: flex-end;
 }
+
+// The project's waveform in miniature (CardWaveform); an empty strip until it exists.
+.wave-project-card__wave {
+  display: block;
+  width: 100%;
+  height: 32px;
+
+  rect { fill: var(--wave-accent); opacity: 0.4; transition: opacity 140ms ease; }
+}
+
+.wave-project-card:hover .wave-project-card__wave rect,
+.wave-project-card:focus-visible .wave-project-card__wave rect { opacity: 0.75; }
+
+.wave-project-card__retry.cds--btn { margin: spacing.$spacing-03 0 0 (-(spacing.$spacing-05)); }
 
 .wave-project-card__footer {
   padding-top: 6px;
@@ -401,24 +950,6 @@ body {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 11px;
   color: var(--wave-text-faint);
-}
-
-// ─── Project status badges ────────────────────────────────────────────────────
-.wave-project-badge {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  padding: 2px 7px;
-  border-radius: 2px;
-  white-space: nowrap;
-
-  &--dim   { background: rgba(255,255,255,0.05); color: #6f6f6f; border: 1px solid #2e2e2e; }
-  &--blue  { background: rgba(69,137,255,0.12);  color: #78a9ff; border: 1px solid rgba(69,137,255,0.25); }
-  &--amber { background: rgba(232,160,32,0.12);  color: var(--wave-accent); border: 1px solid rgba(232,160,32,0.3); }
-  &--green { background: rgba(66,190,101,0.12);  color: #42be65; border: 1px solid rgba(66,190,101,0.25); }
-  &--red   { background: rgba(250,77,86,0.12);   color: #ff8389; border: 1px solid rgba(250,77,86,0.25); }
 }
 
 // ─── New project form ─────────────────────────────────────────────────────────
@@ -515,319 +1046,10 @@ body {
   strong { color: #f4f4f4; }
 }
 
-// ─── Model grid ──────────────────────────────────────────────────────────────
-.wave-model-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: 16px;
-}
-
-// ─── Model card ──────────────────────────────────────────────────────────────
-.wave-model-card {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 18px 20px;
-  background: #1a1a1a;
-  border: 1px solid #2a2a2a;
-  border-radius: 2px;
-  transition: border-color 120ms ease;
-
-  &--ready {
-    border-color: rgba(232, 160, 32, 0.25);
-  }
-
-  &--error {
-    border-color: rgba(250, 77, 86, 0.35);
-  }
-
-  &--selected {
-    border-color: var(--wave-accent);
-    background: #1f1c14;
-  }
-}
-
-.wave-model-card__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.wave-model-card__title-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.wave-model-card__name {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 14px;
-  font-weight: 600;
-  color: #f4f4f4;
-  margin: 0;
-  letter-spacing: 0.02em;
-}
-
-.wave-model-card__size {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 12px;
-  color: var(--wave-text-tertiary);
-  white-space: nowrap;
-}
-
-// ─── Badges ──────────────────────────────────────────────────────────────────
-.wave-model-card__badges {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.wave-badge {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  padding: 2px 7px;
-  border-radius: 2px;
-
-  &--amber {
-    background: rgba(232, 160, 32, 0.15);
-    color: var(--wave-accent);
-    border: 1px solid rgba(232, 160, 32, 0.3);
-  }
-
-  &--teal {
-    background: rgba(0, 179, 179, 0.12);
-    color: #3ddbd9;
-    border: 1px solid rgba(0, 179, 179, 0.25);
-  }
-
-  &--dim {
-    background: rgba(255, 255, 255, 0.05);
-    color: #6f6f6f;
-    border: 1px solid #2e2e2e;
-  }
-}
-
-// ─── Card body ───────────────────────────────────────────────────────────────
-.wave-model-card__desc {
-  font-size: 13px;
-  color: var(--wave-text-secondary);
-  line-height: 1.55;
-  margin: 0;
-}
-
-.wave-model-card__best-for {
-  font-size: 12px;
-  color: var(--wave-text-tertiary);
-
-  .wave-model-card__label {
-    margin-right: 6px;
-  }
-}
-
-.wave-model-card__label {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--wave-text-muted);
-  margin-right: 8px;
-}
-
-// ─── Score dots ──────────────────────────────────────────────────────────────
-.wave-model-card__scores {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  padding: 10px 0;
-  border-top: 1px solid #222;
-  border-bottom: 1px solid #222;
-}
-
-// Grid: [label 72px] [dots auto] [speed-text 1fr]
-// "ACCURACY" is the longest label at ~64px — 72px gives comfortable clearance
-// so dots on every card start at the same X position regardless of label length.
-.wave-model-card__score-row {
-  display: grid;
-  grid-template-columns: 72px auto 1fr;
-  align-items: center;
-
-  // label column already has its own styles via .wave-model-card__label
-  .wave-model-card__label {
-    margin-right: 0; // gap handled by grid
-  }
-}
-
-.wave-model-card__score-label {
-  font-size: 11px;
-  color: var(--wave-text-tertiary);
-  margin-left: 8px;
-}
-
-.wave-score-dots {
-  display: flex;
-  gap: 4px;
-}
-
-.wave-score-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  border: 1px solid #333;
-  background: transparent;
-
-  &--filled {
-    border-color: transparent;
-  }
-
-  &--amber#{&}--filled  { background: var(--wave-accent); }
-  &--teal#{&}--filled   { background: #3ddbd9; }
-}
-
-.wave-model-card__reqs {
-  font-size: 11px;
-  color: var(--wave-text-muted);
-  margin: 0;
-  font-family: 'IBM Plex Mono', monospace;
-}
-
-// ─── Error banner ─────────────────────────────────────────────────────────────
-.wave-model-card__error-banner {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 10px 12px;
-  background: rgba(250, 77, 86, 0.08);
-  border: 1px solid rgba(250, 77, 86, 0.25);
-  border-radius: 2px;
-  font-size: 12px;
-  color: #ff8389;
-  line-height: 1.4;
-
-  svg {
-    flex-shrink: 0;
-    fill: #fa4d56;
-    margin-top: 1px;
-  }
-}
-
-// ─── Download progress ───────────────────────────────────────────────────────
-.wave-model-card__progress {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.wave-model-card__progress-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 12px;
-  font-family: 'IBM Plex Mono', monospace;
-  color: #6f6f6f;
-}
-
-.wave-model-card__progress-right {
-  display: flex;
-  gap: 10px;
-}
-
-.wave-model-card__speed { color: #8d8d8d; }
-.wave-model-card__eta   { color: #525252; }
-
-.wave-model-card__resuming-note {
-  font-size: 11px;
-  color: var(--wave-accent);
-  font-family: 'IBM Plex Mono', monospace;
-}
-
-// Override Carbon's ProgressBar fill colour to use our amber
-.wave-progress-bar .cds--progress-bar__bar {
-  background: var(--wave-accent);
-}
-
-// ─── Card footer ─────────────────────────────────────────────────────────────
-.wave-model-card__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: auto;
-  padding-top: 4px;
-}
-
-// Selected badge (top of card when model is active)
-.wave-model-card__selected-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  align-self: flex-start;
-  background: rgba(232, 160, 32, 0.12);
-  border: 1px solid rgba(232, 160, 32, 0.35);
-  border-radius: 2px;
-  padding: 2px 8px;
-  font-size: 11px;
-  font-family: 'IBM Plex Mono', monospace;
-  color: var(--wave-accent);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-
-  svg { fill: var(--wave-accent); }
-}
-
-// Ready row (ready label + "Use for transcription" side by side)
-.wave-model-card__ready-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 1;
-}
-
-.wave-model-card__ready-label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: var(--wave-accent);
-
-  svg { fill: var(--wave-accent); }
-}
-
-// "Use for transcription" ghost button
-.wave-btn-select-model.cds--btn--ghost {
-  color: var(--wave-text-tertiary);
-  font-size: 12px;
-  padding: 2px 8px;
-  min-height: unset;
-  height: 24px;
-
-  &:hover { color: var(--wave-accent); background: rgba(232, 160, 32, 0.08); }
-}
-
-.wave-model-card__partial-note {
-  font-size: 11px;
-  color: #525252;
-  font-family: 'IBM Plex Mono', monospace;
-}
-
-// ─── Danger ghost button ──────────────────────────────────────────────────────
-.wave-btn-danger-ghost.cds--btn--ghost {
-  color: #fa4d56;
-
-  svg { fill: #fa4d56; }
-
-  &:hover {
-    background: rgba(250, 77, 86, 0.1);
-    color: #ff8389;
-  }
-}
-
 // ─── Carbon button accent override ───────────────────────────────────────────
-.wave-btn-accent.cds--btn--primary {
+// Primary actions are amber, in dialogs too (danger buttons stay red).
+.wave-btn-accent.cds--btn--primary:not(:disabled),
+.cds--modal-footer .cds--btn--primary:not(:disabled) {
   background: var(--wave-accent);
   color: #000;
 
@@ -845,45 +1067,69 @@ body {
 }
 
 // ─── Settings page ───────────────────────────────────────────────────────────
-.wave-settings-section {
-  margin-bottom: 32px;
+.wave-settings {
+  max-width: 800px;
 }
 
-
 .wave-settings-section__header {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  margin-bottom: 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #262626;
+  margin-bottom: spacing.$spacing-05;
 }
 
 .wave-settings-section__title {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--wave-accent);
-  margin: 0;
+  @include type.type-style('heading-03');
+  color: theme.$text-primary;
+  margin: 0 0 spacing.$spacing-02;
 }
 
 .wave-settings-section__desc {
-  font-size: 13px;
-  color: var(--wave-text-muted);
+  @include type.type-style('body-compact-01');
+  color: theme.$text-secondary;
   margin: 0;
 }
 
-.wave-settings-placeholder {
+// Model rows, grouped like the editor's Tools (a ContainedList per group).
+.wave-model-group + .wave-model-group { margin-top: spacing.$spacing-06; }
+
+.wave-model-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-02;
+  padding-inline-end: spacing.$spacing-05;
+
+  .cds--progress-bar, .cds--inline-loading { margin-top: spacing.$spacing-03; }
+  .cds--inline-notification { max-width: none; margin: spacing.$spacing-03 0 0; }
+}
+
+.wave-model-row__name {
+  @include type.type-style('heading-compact-01');
+  margin: 0;
+  color: theme.$text-primary;
+}
+
+.wave-model-row__summary {
+  @include type.type-style('body-compact-01');
+  max-width: 64ch;
+  margin: 0;
+  color: theme.$text-secondary;
+}
+
+.wave-model-row__meta {
+  @include type.type-style('helper-text-01');
+  margin: 0;
+  color: theme.$text-helper;
+}
+
+// The state and the one action, beside the row.
+.wave-model-row .cds--contained-list-item__action {
+  top: 50%;
+  inset-block-start: 50%;
+  transform: translateY(-50%);
+}
+
+.wave-model-row__action {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 20px;
-  border: 1px dashed #2e2e2e;
-  border-radius: 2px;
-  color: var(--wave-text-tertiary);
-  font-size: 13px;
+  gap: spacing.$spacing-05;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -910,29 +1156,6 @@ body {
   padding: 0 16px;
   background: #0f0f0f;
   border-bottom: 1px solid #262626;
-}
-
-.wave-editor-topbar__back {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: none;
-  border-radius: 2px;
-  background: transparent;
-  color: var(--wave-text-tertiary);
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background 120ms ease, color 120ms ease;
-
-  svg { fill: currentColor; }
-
-  &:hover {
-    background: rgba(255, 255, 255, 0.06);
-    color: var(--wave-text-primary);
-  }
 }
 
 .wave-editor-topbar__divider {
@@ -977,10 +1200,6 @@ body {
   max-width: 280px;
 }
 
-.wave-editor-topbar__status {
-  flex-shrink: 0;
-}
-
 // ─── Body (editor + inspector) ────────────────────────────────────────────────
 
 .wave-editor-body {
@@ -994,6 +1213,7 @@ body {
 .wave-editor-scroll {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   overflow-y: auto;
   padding: 40px 56px;
   scroll-behavior: smooth;
@@ -1015,30 +1235,75 @@ body {
   }
 }
 
-// ─── Word nodes ───────────────────────────────────────────────────────────────
+// ─── Words in the transcript ─────────────────────────────────────────────────
+// Every state a word can be in, in one place and in order of precedence:
+// where two set the same property, the later rule wins, so nothing needs
+// !important. Background-setting states use `.wave-word.wave-word--x` to rank
+// above hover. Marks switch instantly, never fade: a highlight that moves word
+// to word while fading leaves a flickering trail.
 
 .wave-word {
   cursor: pointer;
   border-radius: 2px;
   padding: 2px 0;
-  transition: background 80ms ease;
 
-  &:hover {
-    background: rgba(255, 255, 255, 0.09);
-  }
+  &:hover { background: rgba(255, 255, 255, 0.09); }
+}
 
-  // Medium confidence (60–80%)
-  &--mid { color: #a8a8a8; }
+// Possibly misheard (< 60 % confidence): dimmed, never coloured.
+.wave-word--low { color: var(--wave-text-tertiary); }
 
-  // Low confidence (<60%) — amber warning
-  &--low { color: var(--wave-accent); }
+// Corrected by hand: a faint green tint with a green bar under it (Carbon's
+// success colour). A checked word is never dimmed as possibly misheard.
+.wave-word--corrected {
+  background: rgba(66, 190, 101, 0.1);
+  box-shadow: inset 0 -2px 0 theme.$support-success;
+}
 
-  // Deleted word (Phase 7: text-based audio editing)
-  &--deleted {
-    text-decoration: line-through;
-    opacity: 0.35;
-    cursor: default;
-  }
+// The word under the mouse on the waveform: a faint underline.
+.wave-word--hover {
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 255, 255, 0.45);
+  text-underline-offset: 3px;
+}
+
+// Marked for reference from the timeline (right-click): a purple bar under it.
+.wave-word--reference { box-shadow: inset 0 -2px 0 rgba(190, 149, 255, 0.9); }
+
+// Part of the word's audio is cut on the waveform (the text stays).
+.wave-word--partcut {
+  text-decoration: underline wavy rgba(255, 131, 137, 0.75);
+  text-underline-offset: 3px;
+}
+
+// A Find match (⌘F): a yellow highlighter; the selected one is the selection.
+.wave-word.wave-word--match { background: rgba(241, 194, 27, 0.22); }
+
+// Selected, or only touched by the selection.
+.wave-word.wave-word--selected {
+  background: rgba(100, 149, 237, 0.22);
+  outline: 1px solid rgba(100, 149, 237, 0.35);
+}
+
+.wave-word--selected-part { outline: 1px dashed rgba(100, 149, 237, 0.55); }
+
+// Cut: deleted as a word, or all of its audio cut on the waveform.
+.wave-word.wave-word--deleted,
+.wave-word.wave-word--cutaudio {
+  text-decoration: line-through;
+  opacity: 0.4;
+  color: #ff8389;
+  background: rgba(255, 131, 137, 0.08);
+  cursor: default;
+}
+
+// The word playing now: a strong amber tint with an accent bar under it, like
+// the playhead on the waveform. The text stays light on a translucent tint, so
+// nothing flips colour as the highlight moves on.
+.wave-word.wave-word--active {
+  background: rgba(232, 160, 32, 0.32);
+  box-shadow: inset 0 -2px 0 var(--wave-accent);
+  color: var(--wave-text-primary);
 }
 
 // ─── Loading / empty states inside editor ────────────────────────────────────
@@ -1072,197 +1337,6 @@ body {
 
 // ─── Inspector panel ──────────────────────────────────────────────────────────
 
-.wave-inspector {
-  width: 260px;
-  flex-shrink: 0;
-  border-left: 1px solid #262626;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: #111;
-}
-
-// Tab bar
-.wave-inspector-tabs {
-  display: flex;
-  border-bottom: 1px solid #262626;
-  flex-shrink: 0;
-}
-
-.wave-inspector-tab {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 10px 8px;
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--wave-text-muted);
-  font-size: 12px;
-  cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease;
-
-  svg { fill: currentColor; flex-shrink: 0; }
-
-  &:hover { color: var(--wave-text-secondary); }
-
-  &--active {
-    color: var(--wave-accent);
-    border-bottom-color: var(--wave-accent);
-
-    svg { fill: var(--wave-accent); }
-  }
-}
-
-// Tab content wrapper
-.wave-inspector-tab-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-// Section
-.wave-inspector-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-
-  &--disabled { opacity: 0.5; }
-}
-
-.wave-inspector-section__title {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--wave-text-muted);
-  margin: 0 0 4px;
-}
-
-.wave-inspector-section__note {
-  font-size: 11px;
-  color: var(--wave-text-faint);
-  margin: 2px 0 0;
-  line-height: 1.4;
-
-  &--error { color: #ff8389; }
-}
-
-// Export list
-.wave-inspector-export-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.wave-inspector-export-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 2px;
-  transition: background 100ms ease;
-
-  &:hover { background: rgba(255, 255, 255, 0.04); }
-
-  &--dim { opacity: 0.5; }
-}
-
-.wave-inspector-export-row__info {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.wave-inspector-export-row__label {
-  font-size: 13px;
-  color: var(--wave-text-secondary);
-  white-space: nowrap;
-}
-
-.wave-inspector-export-row__desc {
-  font-size: 11px;
-  color: var(--wave-text-faint);
-}
-
-.wave-inspector-export-btn.cds--btn--ghost {
-  padding: 4px 8px;
-  min-height: unset;
-  height: 28px;
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 11px;
-  color: var(--wave-text-tertiary);
-  white-space: nowrap;
-
-  svg { fill: currentColor; }
-
-  &:hover:not(:disabled) {
-    background: rgba(232, 160, 32, 0.08);
-    color: var(--wave-accent);
-  }
-}
-
-// Details tab
-.wave-inspector-details {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  margin: 0;
-}
-
-.wave-inspector-details__row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 7px 0;
-  border-bottom: 1px solid #1e1e1e;
-
-  &:last-child { border-bottom: none; }
-
-  dt {
-    font-size: 12px;
-    color: var(--wave-text-muted);
-  }
-
-  dd {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 12px;
-    color: var(--wave-text-secondary);
-    margin: 0;
-  }
-}
-
-// Confidence legend
-.wave-inspector-conf-legend {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 0;
-  font-size: 13px;
-}
-
-// Empty state inside inspector
-.wave-inspector-empty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: var(--wave-text-faint);
-  font-size: 13px;
-
-  svg { fill: currentColor; opacity: 0.4; }
-}
-
 // ─── Timeline strip ───────────────────────────────────────────────────────────
 
 .wave-timeline {
@@ -1273,6 +1347,10 @@ body {
   flex-direction: column;
   // height is set via inline style from panelHeight state
   overflow: hidden;
+  // Dragging here edits audio; never let it start a text selection (WebKit
+  // would otherwise highlight the whole window during a waveform drag).
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 // ─── Resize handle ────────────────────────────────────────────────────────────
@@ -1439,6 +1517,27 @@ body {
   font-size: 10px;
 }
 
+// Selection start – end and length, right-aligned in the toolbar; updates live
+// while a selection is drawn or resized.
+.wave-selection-readout {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: #8aaeee;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.wave-selection-readout__len {
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: rgba(100, 149, 237, 0.16);
+  color: #b0c8f5;
+}
+
 // ─── Word track ───────────────────────────────────────────────────────────────
 // Strip between the time ruler and the waveform canvas. Each word gets a
 // positioned chip; silence sentinels and inter-word gaps get their own chips.
@@ -1506,6 +1605,12 @@ body {
     }
   }
 
+  // Corrected by hand: green, as in the transcript.
+  &--corrected {
+    border-bottom: 2px solid theme.$support-success;
+    color: #6fdc8c;
+  }
+
   // Deleted words: red tint to mirror the waveform's red deleted regions
   &--deleted {
     background: rgba(255, 80, 80, 0.07);
@@ -1525,6 +1630,24 @@ body {
     border-color: rgba(100, 149, 237, 0.35);
     color: #8aaeee;
   }
+
+  // Only partly inside the selection (a trim at its edge): outline, no fill.
+  &--selected-part {
+    border-style: dashed;
+    border-color: rgba(100, 149, 237, 0.6);
+  }
+
+  // Partly trimmed by a cut drawn on the waveform.
+  &--partcut {
+    border-bottom: 2px solid rgba(255, 80, 80, 0.55);
+  }
+
+  // Marked for reference from the transcript (right-click): purple outline,
+  // matching the outlined region on the waveform.
+  &--reference {
+    border-color: rgba(190, 149, 255, 0.85);
+    color: #d4bbff;
+  }
 }
 
 // ── Gap duration badge ────────────────────────────────────────────────────────
@@ -1543,38 +1666,6 @@ body {
   pointer-events: none;
   white-space: nowrap;
   overflow: hidden;
-}
-
-// ─── Word boundary marker layer ───────────────────────────────────────────────
-
-.wave-boundary-layer {
-  position: absolute;
-  inset: 0;
-  z-index: 1;      // below overlay (z-index 2) so it doesn't block interaction
-  pointer-events: none;
-  overflow: hidden;
-}
-
-.wave-boundary-marker {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  // calc(X% - scrollLeftPx) set inline
-  background: rgba(100, 149, 237, 0.25);
-  transform: translateX(-50%);
-
-  // Small dot at the top to visually anchor the marker
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -1px;
-    width: 3px;
-    height: 3px;
-    border-radius: 50%;
-    background: rgba(100, 149, 237, 0.5);
-  }
 }
 
 .wave-waveform-wrapper {
@@ -1598,22 +1689,32 @@ body {
   }
 }
 
-.wave-waveform-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  user-select: none;
+// wavesurfer.js renders into a shadow root; its regions are styled via ::part.
+.wave-waveform-canvas {
+  &--cursor { cursor: text; }
+  &--blade  { cursor: crosshair; }
 
-  &--cursor {
-    cursor: default;
-
-    &:active {
-      cursor: col-resize;
-    }
+  // Resize handles: the default 50%-black line vanishes on the dark theme.
+  // Widen the hit area and give each kind of region a visible edge.
+  > div::part(region-handle) {
+    width: 8px !important;
+    border-color: rgba(255, 255, 255, 0.55) !important;
+    transition: border-color 80ms ease;
   }
-
-  &--blade {
-    cursor: crosshair;
+  > div::part(region-handle):hover {
+    border-color: #ffffff !important;
+  }
+  // Thicker edges on every resizable region (cuts and the selection), so
+  // they're easy to grab and drag.
+  > div::part(region-handle-left),
+  > div::part(region-handle-right) {
+    border-width: 2px !important;
+  }
+  // Hover readout (time under the cursor).
+  > div::part(hover-label) {
+    font-family: 'IBM Plex Mono', monospace;
+    border-radius: 2px;
+    padding: 1px 4px;
   }
 }
 
@@ -1706,31 +1807,12 @@ body {
 
   &:hover { background: rgba(255,255,255,0.05); color: var(--wave-text-secondary); }
 
-  &--active {
+  // Also under the pointer: the current speed stays marked.
+  &--active,
+  &--active:hover {
     background: var(--wave-accent-subtle);
     color: var(--wave-accent);
   }
-}
-
-// ─── Word highlights (active playback + selection) ────────────────────────────
-
-.wave-word--active {
-  background: rgba(232, 160, 32, 0.18) !important;
-  border-radius: 2px;
-  color: var(--wave-text-primary) !important;
-}
-
-.wave-word--selected {
-  background: rgba(100, 149, 237, 0.22) !important;
-  border-radius: 2px;
-  outline: 1px solid rgba(100, 149, 237, 0.35);
-}
-
-.wave-word--deleted {
-  text-decoration: line-through;
-  opacity: 0.4;
-  color: #ff8389 !important;
-  background: rgba(255, 131, 137, 0.08) !important;
 }
 
 // Silence sentinel (█ block representing ≥ 3 s of silence between words)
@@ -1759,79 +1841,6 @@ body {
 
   .wave-segment__text {
     text-align: center;
-  }
-}
-
-// ─── Edits list ───────────────────────────────────────────────────────────────
-
-.wave-inspector-empty--inline {
-  padding: 32px 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: var(--wave-text-tertiary);
-  text-align: center;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.wave-inspector-empty__hint {
-  margin: 0;
-  color: var(--wave-text-muted);
-  font-size: 12px;
-}
-
-.wave-edits-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.wave-edit-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 0;
-  border-bottom: 1px solid #1e1e1e;
-
-  &:last-child {
-    border-bottom: none;
-  }
-}
-
-.wave-edit-item__label {
-  font-size: 11px;
-  color: var(--wave-text-secondary);
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wave-edit-item__undo {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 6px;
-  background: transparent;
-  border: 1px solid #2e2e2e;
-  border-radius: 3px;
-  color: var(--wave-text-muted);
-  font-size: 10px;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: border-color 80ms, color 80ms;
-
-  &:hover {
-    border-color: #ff8389;
-    color: #ff8389;
   }
 }
 
@@ -1874,7 +1883,9 @@ body {
 
   &:hover { background: rgba(255,255,255,0.05); color: var(--wave-text-secondary); }
 
-  &--active {
+  // Also under the pointer: the current view stays marked.
+  &--active,
+  &--active:hover {
     background: var(--wave-accent-subtle);
     color: var(--wave-accent);
     font-weight: 500;
@@ -1918,26 +1929,6 @@ body {
 
 // ─── Keyboard shortcuts in inspector ─────────────────────────────────────────
 
-.wave-inspector-shortcuts {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  margin: 0;
-}
-
-.wave-inspector-shortcuts__row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 0;
-  border-bottom: 1px solid #1a1a1a;
-
-  &:last-child { border-bottom: none; }
-
-  dt { margin: 0; }
-  dd { font-size: 12px; color: var(--wave-text-muted); margin: 0; }
-}
-
 .wave-kbd {
   display: inline-flex;
   align-items: center;
@@ -1950,4 +1941,648 @@ body {
   border-radius: 3px;
   padding: 1px 6px;
   white-space: nowrap;
+}
+
+// Context-menu header: what the menu acts on (word / cut / selection, with times).
+// The field for correcting a word, under the word (WordCorrection). A raised
+// layer like the context menu.
+.wave-correct {
+  position: fixed;
+  z-index: 9000;
+  width: 16rem;
+  padding: spacing.$spacing-03;
+  background: theme.$layer-01;
+  border: 1px solid theme.$border-subtle-01;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+// The header names the target; it's an item only so it sits in the menu, so it
+// reads as a caption (secondary text) rather than a greyed-out action.
+.wave-word-menu .wave-word-menu__header,
+.wave-word-menu .wave-word-menu__header:hover {
+  @include type.type-style('code-01');
+  color: theme.$text-secondary;
+  cursor: default;
+  // Two lines, what and when, rather than one truncated line.
+  block-size: auto;
+  min-block-size: 2rem;
+  padding-block: spacing.$spacing-02;
+
+  .cds--menu-item__label { white-space: pre-line; }
+}
+
+// ─── Added pauses in the text ─────────────────────────────────────────────────
+// A pause added by hand: a small green tag between the words, like the
+// marker on the waveform. Not text: it can't be typed into or selected alone.
+.wave-word--pause-token {
+  @include type.type-style('code-01');
+  display: inline-block;
+  padding: 0 spacing.$spacing-02;
+  border: 1px solid rgba(66, 190, 101, 0.55);
+  border-radius: 2px;
+  background: rgba(66, 190, 101, 0.1);
+  color: theme.$support-success;
+  font-size: 0.78em;
+  line-height: 1.5;
+  vertical-align: 0.1em;
+  cursor: default;
+  user-select: none;
+}
+
+// ─── Pauses tool ──────────────────────────────────────────────────────────────
+
+.wave-pauses__hint { margin: 0; }
+
+// The label on an added pause's marker in the waveform ("+0.5 s").
+.wave-pause-marker {
+  @include type.type-style('code-01');
+  display: inline-block;
+  margin: 2px 0 0 3px;
+  padding: 0 3px;
+  border-radius: 2px;
+  background: rgba(66, 190, 101, 0.9);
+  color: #0b1f10;
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+// ─── Inspector ───────────────────────────────────────────────────────────────
+// Carbon Tabs over Carbon lists; the width is dragged from the left edge.
+
+.wave-inspector {
+  position: relative;
+  flex-shrink: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: theme.$background;
+  border-left: 1px solid theme.$border-subtle-00;
+}
+
+.wave-inspector__resize {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 6px;
+  z-index: 2;
+  cursor: ew-resize;
+
+  &::after {
+    content: '';
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    width: 2px;
+    background: transparent;
+    transition: background 120ms ease;
+  }
+
+  &:hover::after,
+  &:active::after,
+  &:focus-visible::after { background: var(--wave-accent); }
+
+  &:focus { outline: none; }
+}
+
+// While dragging the panel edge: keep the resize cursor and no text selection.
+body.wave-resizing-x {
+  cursor: ew-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.wave-inspector__tabs {
+  flex-shrink: 0;
+  // The selected tab is marked in the app's accent.
+  --cds-border-interactive: var(--wave-accent);
+
+  // Tabs share the panel's full width, however wide it is.
+  .cds--tab--list { flex: 1 1 auto; }
+
+  .cds--tabs__nav-item {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  // Icon over a short label: four tabs fit the narrowest inspector (300 px).
+  .cds--tabs__nav-link {
+    height: auto;
+    block-size: auto;
+    padding: spacing.$spacing-03 spacing.$spacing-02;
+  }
+
+  .cds--tabs__nav-item-label-wrapper {
+    flex-direction: column;
+    align-items: center;
+    gap: spacing.$spacing-02;
+  }
+
+  .cds--tabs__nav-item--icon {
+    display: flex;
+    order: -1;
+    margin: 0;
+  }
+
+  .cds--tabs__nav-item-label {
+    @include type.type-style('label-01');
+  }
+}
+
+.wave-inspector__panel.cds--tab-content {
+  // Positioned, so Carbon's absolutely placed parts (hidden labels, tooltips)
+  // scroll with the panel instead of stretching the inspector, which would
+  // let focus scroll the tabs out of view.
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0;
+}
+
+// The audio export (Export tab): the format, its preset, then what's being
+// exported and Export. One list item holding the form, under the list's label.
+.wave-export-audio .cds--contained-list-item__content {
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-04;
+  padding-block: spacing.$spacing-04 spacing.$spacing-05;
+
+  .cds--form__helper-text { margin: 0; }
+  .cds--radio-button-group { margin-top: spacing.$spacing-02; }
+}
+
+.wave-export-audio__go {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: spacing.$spacing-03;
+}
+
+.wave-inspector__stack {
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-06;
+  padding-block: spacing.$spacing-03 spacing.$spacing-07;
+
+  > .cds--inline-notification {
+    margin-inline: spacing.$spacing-05;
+    width: auto;
+    max-width: none;
+  }
+}
+
+.wave-inspector__action {
+  align-self: flex-start;
+  margin-inline: spacing.$spacing-05;
+}
+
+.wave-inspector__empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: spacing.$spacing-03;
+  padding: spacing.$spacing-07 spacing.$spacing-06;
+  text-align: center;
+  @include type.type-style('body-compact-01');
+  color: theme.$text-helper;
+
+  p { margin: 0; }
+  svg { fill: currentColor; }
+}
+
+// Contained-list rows: a title over helper text, or a label and a value.
+.wave-list-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wave-list-text__title {
+  @include type.type-style('body-compact-01');
+  color: theme.$text-primary;
+}
+
+.wave-list-text__helper {
+  @include type.type-style('helper-text-01');
+  color: theme.$text-helper;
+}
+
+.wave-list-value {
+  display: flex;
+  justify-content: space-between;
+  gap: spacing.$spacing-05;
+  color: theme.$text-secondary;
+}
+
+.wave-list-value__value {
+  @include type.type-style('code-01');
+  color: theme.$text-primary;
+}
+
+// ─── Tools (a list of the tools, or one open) ───────────────────────────────
+// The list: a ContainedList per group (Clean up, Sound, People), a row per
+// tool with its status and next step. One tool open: a back arrow and its name
+// over its panel; its settings fold under Options.
+
+.wave-tools { padding-bottom: spacing.$spacing-05; }
+
+.wave-tools__text {
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-01;
+  min-width: 0;
+}
+
+// The next step and the chevron (the row opens the tool) sit beside the row,
+// centred on it, and the text stops short of them (RowActions measures them).
+.wave-tools__row .cds--contained-list-item__content {
+  padding-inline-end: calc(var(--wave-tools-actions, #{spacing.$spacing-09}) + #{spacing.$spacing-05});
+}
+
+.wave-tools__row .cds--contained-list-item__action {
+  top: 50%;
+  inset-block-start: 50%;
+  transform: translateY(-50%);
+}
+
+.wave-tools__actions {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-02;
+
+  .cds--toggle { margin-inline-end: spacing.$spacing-03; }
+}
+
+.wave-tools__name {
+  @include type.type-style('body-compact-01');
+  color: theme.$text-primary;
+}
+
+// Up to two lines: a status says what's applied, so it isn't cut short.
+.wave-tools__status {
+  @include type.type-style('helper-text-01');
+  display: -webkit-box;
+  overflow: hidden;
+  color: theme.$text-secondary;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.wave-tool-detail__header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-02;
+  padding: spacing.$spacing-02 spacing.$spacing-03;
+  border-bottom: 1px solid theme.$border-subtle-01;
+  background: theme.$background;
+}
+
+.wave-tool-detail__title {
+  @include type.type-style('heading-compact-01');
+  margin: 0;
+  color: theme.$text-primary;
+}
+
+.wave-tool-detail__body { padding: spacing.$spacing-05 spacing.$spacing-05 spacing.$spacing-07; }
+
+// A choice with a line on what it does (clean-up, EQ presets, export quality).
+.wave-choice-list .cds--radio-button-wrapper { margin-bottom: spacing.$spacing-03; }
+
+.wave-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wave-choice__name {
+  @include type.type-style('body-compact-01');
+  color: theme.$text-primary;
+}
+
+.wave-choice__note {
+  @include type.type-style('helper-text-01');
+  color: theme.$text-secondary;
+}
+
+.wave-eq-chain {
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-02;
+
+  .cds--form__helper-text { margin: 0; }
+}
+
+// The Options toggle sits flush with the text above it.
+.wave-tool-options > .cds--btn { margin-left: calc(-1 * #{spacing.$spacing-05}); }
+.wave-tool-options__body { padding-top: spacing.$spacing-03; }
+
+.wave-enhance-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: spacing.$spacing-03;
+
+  .cds--content-switcher { width: 100%; }
+}
+
+.wave-tool-note,
+.wave-tool-summary {
+  @include type.type-style('body-compact-01');
+  color: theme.$text-secondary;
+  margin: 0;
+}
+
+.wave-tool-summary { color: theme.$text-primary; }
+
+.wave-tool-summary__muted { color: theme.$text-helper; }
+
+.wave-tool-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: spacing.$spacing-03;
+}
+
+.wave-tool-credit {
+  @include type.type-style('helper-text-01');
+  color: theme.$text-helper;
+  margin: 0;
+}
+
+// ─── Keyboard shortcuts sheet ────────────────────────────────────────────────
+
+.wave-shortcuts-modal .cds--modal-content {
+  padding-inline-end: spacing.$spacing-05;
+}
+
+// ─── About Wave ───────────────────────────────────────────────────────────────
+// The welcome's animation, the name and version, what Wave does (two columns),
+// then who made it and the models it runs on.
+
+// Between Carbon's md and lg: room for two columns of features without long lines.
+.wave-about .cds--modal-container { max-inline-size: 56rem; }
+
+.wave-about .cds--modal-content {
+  margin-block-end: spacing.$spacing-06;
+  padding-inline-end: spacing.$spacing-05;
+}
+
+.wave-about__body {
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-05;
+  padding-bottom: spacing.$spacing-03;
+
+  &:focus { outline: none; }
+  .wave-hero { width: min(38rem, 100%); margin: 0 auto; }
+}
+
+.wave-about__name {
+  display: flex;
+  align-items: baseline;
+  gap: spacing.$spacing-04;
+}
+
+.wave-about__wordmark {
+  font-family: var(--wave-font-display);
+  font-size: 32px;
+  font-weight: 500;
+  font-variation-settings: 'SOFT' 100, 'WONK' 1, 'opsz' 72;
+  line-height: 1;
+  color: theme.$text-primary;
+}
+
+.wave-about__version {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  color: theme.$text-secondary;
+}
+
+.wave-about__intro {
+  @include type.type-style('body-02');
+  max-width: 46rem;
+  margin: calc(-1 * #{spacing.$spacing-03}) 0 spacing.$spacing-03;
+  color: theme.$text-secondary;
+}
+
+.wave-about__features {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: spacing.$spacing-05 spacing.$spacing-07;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wave-about__feature {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: spacing.$spacing-03;
+
+  svg { margin-top: 2px; fill: var(--wave-accent); }
+}
+
+.wave-about__feature-title {
+  @include type.type-style('heading-compact-01');
+  display: block;
+  color: theme.$text-primary;
+}
+
+.wave-about__feature-text {
+  @include type.type-style('body-compact-01');
+  display: block;
+  margin-top: spacing.$spacing-01;
+  color: theme.$text-secondary;
+}
+
+.wave-about__credit {
+  @include type.type-style('body-compact-01');
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: spacing.$spacing-03 spacing.$spacing-05;
+  padding-top: spacing.$spacing-05;
+  border-top: 1px solid theme.$border-subtle-01;
+  color: theme.$text-secondary;
+
+  strong { font-weight: 600; color: theme.$text-primary; }
+}
+
+.wave-about__links {
+  display: flex;
+  gap: spacing.$spacing-05;
+}
+
+.wave-about__models {
+  @include type.type-style('helper-text-01');
+  margin: calc(-1 * #{spacing.$spacing-03}) 0 0;
+  color: theme.$text-helper;
+}
+
+// Body copy in dialogs (the no-model and delete confirmations).
+.wave-modal-text {
+  @include type.type-style('body-01');
+  color: theme.$text-secondary;
+
+  strong { color: theme.$text-primary; }
+
+  & + & { margin-top: spacing.$spacing-04; }
+  &--secondary { color: theme.$text-helper; }
+}
+
+// Focused on open (so the close button's tooltip doesn't show): no ring.
+.wave-shortcuts:focus { outline: none; }
+
+.wave-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: spacing.$spacing-07 spacing.$spacing-09;
+  padding-bottom: spacing.$spacing-05;
+}
+
+.wave-shortcuts__title {
+  @include type.type-style('heading-compact-01');
+  color: theme.$text-primary;
+  margin: 0 0 spacing.$spacing-02;
+}
+
+.wave-shortcuts__list { margin: 0; }
+
+.wave-shortcuts__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: spacing.$spacing-05;
+  padding-block: spacing.$spacing-03;
+  border-bottom: 1px solid theme.$border-subtle-01;
+
+  dt {
+    @include type.type-style('body-compact-01');
+    color: theme.$text-secondary;
+  }
+
+  dd {
+    display: flex;
+    gap: spacing.$spacing-02;
+    flex-shrink: 0;
+    margin: 0;
+  }
+}
+
+// ─── Speakers ────────────────────────────────────────────────────────────────
+
+// A turn's first paragraph is labelled with the speaker (drawn, not text).
+.wave-transcript-editor .ProseMirror p[data-speaker]::before {
+  content: attr(data-speaker);
+  display: block;
+  margin-bottom: spacing.$spacing-02;
+  @include type.type-style('label-02');
+  font-weight: 600;
+  color: var(--speaker-color, #{theme.$text-secondary});
+  user-select: none;
+}
+
+.wave-transcript-editor .ProseMirror p[data-speaker] {
+  margin-top: spacing.$spacing-06;
+}
+
+@each $i, $color in (0: #33b1ff, 1: #08bdba, 2: #ff7eb6, 3: #6fdc8c, 4: #be95ff, 5: #d2a106, 6: #4589ff, 7: #ff832b) {
+  .wave-transcript-editor .ProseMirror p[data-speaker-index='#{$i}'] { --speaker-color: #{$color}; }
+}
+
+.wave-segment__speaker {
+  display: block;
+  @include type.type-style('label-02');
+  font-weight: 600;
+  color: var(--speaker-color);
+  user-select: none;
+}
+
+.wave-speaker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-03;
+}
+
+.wave-speaker {
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-02;
+}
+
+.wave-speaker__row {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-03;
+
+  .cds--form-item { flex: 1; min-width: 0; }
+}
+
+// A speaker merged into the one above it: smaller, with a way back.
+.wave-speaker__merged {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-03;
+  padding-inline-start: spacing.$spacing-05;
+
+  .wave-speaker__swatch { width: 6px; height: 6px; }
+}
+
+.wave-speaker__merged-name {
+  flex: 1;
+  min-width: 0;
+  @include type.type-style('helper-text-01');
+  color: theme.$text-helper;
+}
+
+.wave-speaker__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.wave-speaker__time {
+  @include type.type-style('code-01');
+  color: theme.$text-helper;
+  flex-shrink: 0;
+  min-width: 3.5em;
+  text-align: right;
+}
+
+// Who has the floor: a strip under the word chips, coloured by speaker.
+.wave-speaker-turn {
+  position: absolute;
+  bottom: 0;
+  height: 3px;
+  border-radius: 1px;
+  opacity: 0.85;
+
+  &--dimmed { opacity: 0.2; }
+}
+
+// While the audio is still decoding (the waveform is already drawn): the play
+// button pulses gently; a press plays as soon as the audio is ready.
+.wave-playback__play-btn--waiting {
+  animation: wave-waiting 1.2s ease-in-out infinite;
+}
+
+@keyframes wave-waiting {
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wave-playback__play-btn--waiting { animation: none; opacity: 0.6; }
 }

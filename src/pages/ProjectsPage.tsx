@@ -1,7 +1,10 @@
-import { useState } from 'react';
-import { Button, Modal, TextInput, InlineLoading } from '@carbon/react';
-import { Add, ArrowRight, DocumentAudio, TrashCan, WarningAltFilled, ErrorFilled, CheckmarkFilled, Music } from '@carbon/icons-react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { Button, IconButton, Modal, Tag, TextInput, InlineLoading } from '@carbon/react';
+import { Add, ArrowRight, CheckmarkFilled, DocumentAudio, Renew, TrashCan, WarningAltFilled, Music } from '@carbon/icons-react';
 import type { Project, ProjectStatus } from '../hooks/useProjects';
+import { formatLength } from '../lib/time';
+import { BrandHero } from '../components/brand/BrandHero';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -10,45 +13,45 @@ function formatDate(ms: number): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function formatDuration(secs?: number): string {
-  if (!secs) return '';
-  const m = Math.floor(secs / 60);
-  const s = Math.floor(secs % 60);
-  return m > 0 ? `${m}m ${s}s` : `${s}s`;
-}
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
 
-function StatusBadge({ status }: { status: ProjectStatus }) {
-  if (status.type === 'empty') {
-    return <span className="wave-project-badge wave-project-badge--dim">No Audio</span>;
-  }
-  if (status.type === 'importing') {
-    return <span className="wave-project-badge wave-project-badge--blue">Importing…</span>;
-  }
-  if (status.type === 'readyToTranscribe') {
-    return <span className="wave-project-badge wave-project-badge--amber">Ready to Transcribe</span>;
-  }
-  if (status.type === 'transcribing') {
-    return <span className="wave-project-badge wave-project-badge--blue">Transcribing…</span>;
-  }
-  if (status.type === 'ready') {
-    return <span className="wave-project-badge wave-project-badge--green">Transcribed</span>;
-  }
-  if (status.type === 'error') {
-    return <span className="wave-project-badge wave-project-badge--red">Error</span>;
-  }
-  return null;
+const STATUS_TAGS: Record<ProjectStatus['type'], { label: string; type: 'gray' | 'blue' | 'warm-gray' | 'green' | 'red' }> = {
+  empty:             { label: 'No audio',            type: 'gray' },
+  importing:         { label: 'Importing',           type: 'blue' },
+  readyToTranscribe: { label: 'Ready to transcribe', type: 'warm-gray' },
+  transcribing:      { label: 'Transcribing',        type: 'blue' },
+  ready:             { label: 'Transcribed',         type: 'green' },
+  error:             { label: 'Error',               type: 'red' },
+};
+
+function StatusTag({ status }: { status: ProjectStatus }) {
+  const tag = STATUS_TAGS[status.type];
+  return <Tag size="sm" type={tag.type} className="wave-project-card__status">{tag.label}</Tag>;
 }
 
-function StatusIcon({ status }: { status: ProjectStatus }) {
-  if (status.type === 'readyToTranscribe' || status.type === 'ready') {
-    return <CheckmarkFilled size={14} className="wave-project-card__status-icon wave-project-card__status-icon--ok" />;
-  }
-  if (status.type === 'error') {
-    return <ErrorFilled size={14} className="wave-project-card__status-icon wave-project-card__status-icon--err" />;
-  }
-  return null;
+// ─── Card waveform ────────────────────────────────────────────────────────────
+
+/** The project's waveform in miniature (waveform.rs → get_waveform_overview). */
+function CardWaveform({ projectId }: { projectId: string }) {
+  const [peaks, setPeaks] = useState<number[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    invoke<number[] | null>('get_waveform_overview', { projectId, points: 96 })
+      .then((p) => { if (!cancelled) setPeaks(p); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [projectId]);
+  if (!peaks) return <div className="wave-project-card__wave" aria-hidden />;
+  const top = Math.max(...peaks, 1e-3);
+  return (
+    <svg className="wave-project-card__wave" viewBox={`0 0 ${peaks.length * 3} 32`} preserveAspectRatio="none" aria-hidden>
+      {peaks.map((p, i) => {
+        const h = Math.max(1.5, (p / top) * 30);
+        return <rect key={i} x={i * 3} y={16 - h / 2} width={2} height={h} rx={1} />;
+      })}
+    </svg>
+  );
 }
 
 // ─── Project card ─────────────────────────────────────────────────────────────
@@ -59,12 +62,15 @@ interface ProjectCardProps {
   transcriptionPct?: number;
   onClick: () => void;
   onDeleteRequest: () => void;
+  /** Try again (failed), or transcribe (imported, never transcribed). */
+  onRetry: () => void;
 }
 
-function ProjectCard({ project, importPct, transcriptionPct, onClick, onDeleteRequest }: ProjectCardProps) {
+function ProjectCard({ project, importPct, transcriptionPct, onClick, onDeleteRequest, onRetry }: ProjectCardProps) {
   const isImporting    = project.status.type === 'importing';
   const isTranscribing = project.status.type === 'transcribing';
   const isError        = project.status.type === 'error';
+  const isWaiting      = project.status.type === 'readyToTranscribe';
 
   return (
     <article
@@ -72,37 +78,38 @@ function ProjectCard({ project, importPct, transcriptionPct, onClick, onDeleteRe
       onClick={onClick}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => e.key === 'Enter' && onClick()}
+      aria-label={`${project.name}, ${STATUS_TAGS[project.status.type].label}`}
+      data-project-card
     >
       <div className="wave-project-card__top">
         <div className="wave-project-card__icon">
           <DocumentAudio size={20} />
         </div>
         <div className="wave-project-card__top-right">
-          <StatusBadge status={project.status} />
-          <button
-            className="wave-project-card__delete-btn"
-            aria-label="Delete project"
-            onClick={(e) => { e.stopPropagation(); onDeleteRequest(); }}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onDeleteRequest(); } }}
+          <StatusTag status={project.status} />
+          <IconButton
+            kind="ghost"
+            size="sm"
+            label="Delete project"
+            align="bottom-end"
+            className="wave-project-card__delete"
+            onClick={(e: React.MouseEvent) => { e.stopPropagation(); onDeleteRequest(); }}
+            onKeyDown={(e: React.KeyboardEvent) => e.stopPropagation()}
           >
-            <TrashCan size={14} />
-          </button>
+            <TrashCan />
+          </IconButton>
         </div>
       </div>
 
       <div className="wave-project-card__body">
-        <h3 className="wave-project-card__name">
-          {project.name}
-          <StatusIcon status={project.status} />
-        </h3>
+        <h3 className="wave-project-card__name">{project.name}</h3>
 
         {project.originalFilename && (
           <p className="wave-project-card__filename">
             {project.originalFilename}
             {project.durationSecs != null && (
               <span className="wave-project-card__duration">
-                &nbsp;·&nbsp;{formatDuration(project.durationSecs)}
+                &nbsp;·&nbsp;{formatLength(project.durationSecs * 1000)}
               </span>
             )}
           </p>
@@ -113,7 +120,21 @@ function ProjectCard({ project, importPct, transcriptionPct, onClick, onDeleteRe
             {(project.status as { type: 'error'; message: string }).message}
           </p>
         )}
+        {(isError || isWaiting) && (
+          <Button
+            kind="ghost"
+            size="sm"
+            renderIcon={isWaiting ? undefined : Renew}
+            className="wave-project-card__retry"
+            onClick={(e: React.MouseEvent) => { e.stopPropagation(); onRetry(); }}
+            onKeyDown={(e: React.KeyboardEvent) => e.stopPropagation()}
+          >
+            {isWaiting ? 'Transcribe' : project.durationSecs ? 'Transcribe again' : 'Import again…'}
+          </Button>
+        )}
       </div>
+
+      {project.status.type === 'ready' && <CardWaveform projectId={project.id} />}
 
       {/* Import progress bar */}
       {isImporting && (
@@ -132,9 +153,9 @@ function ProjectCard({ project, importPct, transcriptionPct, onClick, onDeleteRe
 
       {/* Transcription progress bar */}
       {isTranscribing && (
-        <div className="wave-project-card__import-bar wave-project-card__import-bar--transcribing">
+        <div className="wave-project-card__import-bar">
           <div
-            className="wave-project-card__import-fill wave-project-card__import-fill--transcribing"
+            className="wave-project-card__import-fill"
             style={{ width: `${transcriptionPct ?? 0}%` }}
           />
         </div>
@@ -153,23 +174,6 @@ function ProjectCard({ project, importPct, transcriptionPct, onClick, onDeleteRe
 }
 
 // ─── Empty state ──────────────────────────────────────────────────────────────
-
-const IdleWaveform = () => (
-  <svg className="wave-empty-state__waveform" width="180" height="56" viewBox="0 0 180 56" aria-hidden="true">
-    <rect x="0"   y="22" width="10" height="12" rx="3" />
-    <rect x="14"  y="12" width="10" height="32" rx="3" />
-    <rect x="28"  y="4"  width="10" height="48" rx="3" />
-    <rect x="42"  y="16" width="10" height="24" rx="3" />
-    <rect x="56"  y="0"  width="10" height="56" rx="3" />
-    <rect x="70"  y="10" width="10" height="36" rx="3" />
-    <rect x="84"  y="18" width="10" height="20" rx="3" />
-    <rect x="98"  y="6"  width="10" height="44" rx="3" />
-    <rect x="112" y="14" width="10" height="28" rx="3" />
-    <rect x="126" y="2"  width="10" height="52" rx="3" />
-    <rect x="140" y="18" width="10" height="20" rx="3" />
-    <rect x="154" y="24" width="10" height="8"  rx="3" />
-  </svg>
-);
 
 // ─── New Project Modal ─────────────────────────────────────────────────────────
 
@@ -229,8 +233,8 @@ function NewProjectModal({ open: isOpen, onClose, onCreate, onPickFile }: NewPro
   return (
     <Modal
       open={isOpen}
-      modalHeading="New Project"
-      primaryButtonText={creating ? 'Creating…' : 'Create Project'}
+      modalHeading="New project"
+      primaryButtonText={creating ? 'Creating…' : 'Create project'}
       primaryButtonDisabled={!canCreate}
       secondaryButtonText="Cancel"
       onRequestSubmit={handleCreate}
@@ -297,7 +301,90 @@ interface ProjectsPageProps {
   onPickFile: () => Promise<string | null>;
   onOpenProject: (project: Project) => void;
   onDeleteProject: (id: string) => Promise<void>;
+  onRetryProject: (project: Project) => void;
   onGoToSettings: () => void;
+  /** ⌘N (the menu): open the New Project dialog, then call onNewProjectShown. */
+  newProjectPending: boolean;
+  onNewProjectShown: () => void;
+}
+
+// ─── First run ────────────────────────────────────────────────────────────────
+
+/** The empty Projects page: three steps to a first edit, ticking themselves off. */
+function FirstRun({ hasReadyModel, onNewProject, onGoToSettings }: {
+  hasReadyModel:  boolean;
+  onNewProject:   () => void;
+  onGoToSettings: () => void;
+}) {
+  // Where the user is: setting up, or ready for a first recording.
+  const current = hasReadyModel ? 1 : 0;
+  const steps = [
+    { title: 'Set up transcription', body: hasReadyModel ? 'Ready. It runs on your Mac.' : 'A one-time 1.6 GB download.' },
+    { title: 'Import a recording',   body: 'MP3, WAV, M4A, FLAC and more.' },
+    { title: 'Edit the text',        body: 'Select words, press ⌫. Undo anything.' },
+  ];
+  return (
+    <div className="wave-empty-state wave-welcome">
+      <BrandHero />
+      <h2 className="wave-welcome__title">Welcome to Wave</h2>
+      <ol className="wave-steps">
+        {steps.map((step, i) => {
+          const state = i < current ? 'done' : i === current ? 'current' : 'next';
+          return (
+            <li
+              key={step.title}
+              className={`wave-steps__step wave-steps__step--${state}`}
+              aria-current={state === 'current' ? 'step' : undefined}
+              style={{ animationDelay: `${0.1 + i * 0.07}s` }}
+            >
+              <span className="wave-steps__mark" aria-hidden>
+                {state === 'done' ? <CheckmarkFilled size={16} /> : i + 1}
+              </span>
+              <span className="wave-steps__text">
+                <span className="wave-steps__title">
+                  {step.title}{state === 'done' && <span className="cds--visually-hidden"> (done)</span>}
+                </span>
+                <span className="wave-steps__body">{step.body}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      <div className="wave-welcome__action">
+        {hasReadyModel ? (
+          <>
+            <Button kind="primary" className="wave-btn-accent" renderIcon={Add} onClick={onNewProject}>New project</Button>
+            <span className="wave-welcome__hint">or drop an audio file anywhere on this window</span>
+          </>
+        ) : (
+          <>
+            <Button kind="primary" className="wave-btn-accent" renderIcon={ArrowRight} onClick={onGoToSettings}>Set up transcription</Button>
+            <span className="wave-welcome__hint">in Settings, once</span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Arrow keys move between cards, ⌫ asks to delete the focused one. */
+function gridKeys(e: KeyboardEvent<HTMLDivElement>, onDelete: (index: number) => void) {
+  const cards = [...e.currentTarget.querySelectorAll<HTMLElement>('[data-project-card]')];
+  const index = cards.indexOf(e.target as HTMLElement);
+  if (index < 0) return;
+  // Cards per row: those level with the first.
+  const columns = Math.max(1, cards.filter((c) => c.offsetTop === cards[0].offsetTop).length);
+  const step = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: columns, ArrowUp: -columns }[e.key];
+  if (step !== undefined) {
+    e.preventDefault();
+    cards[Math.max(0, Math.min(cards.length - 1, index + step))]?.focus();
+  } else if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    cards[index].click();
+  } else if (e.key === 'Backspace' || e.key === 'Delete') {
+    e.preventDefault();
+    onDelete(index);
+  }
 }
 
 export function ProjectsPage({
@@ -310,7 +397,10 @@ export function ProjectsPage({
   onPickFile,
   onOpenProject,
   onDeleteProject,
+  onRetryProject,
   onGoToSettings,
+  newProjectPending,
+  onNewProjectShown,
 }: ProjectsPageProps) {
   const [modalOpen,        setModalOpen]        = useState(false);
   const [showNoModelModal, setShowNoModelModal] = useState(false);
@@ -325,6 +415,14 @@ export function ProjectsPage({
     }
   }
 
+  // ⌘N from the menu, also when it brought this page up.
+  useEffect(() => {
+    if (!newProjectPending) return;
+    onNewProjectShown();
+    handleNewProjectClick();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newProjectPending]);
+
   async function handleConfirmDelete() {
     if (!deleteTarget) return;
     setDeleting(true);
@@ -338,13 +436,13 @@ export function ProjectsPage({
 
   return (
     <div className="wave-page">
-      {/* No-model banner */}
-      {!hasReadyModel && (
+      {/* No-model banner (the empty page's first-run steps say it instead) */}
+      {!hasReadyModel && projects.length > 0 && (
         <div className="wave-no-model-banner">
           <WarningAltFilled size={16} />
           <span className="wave-no-model-banner__text">
-            <strong>No model downloaded.</strong>{' '}
-            Download a Whisper model in Settings before creating a project.
+            <strong>Transcription isn&apos;t set up yet.</strong>{' '}
+            Download it in Settings before creating a project.
           </span>
           <Button kind="ghost" size="sm" renderIcon={ArrowRight} onClick={onGoToSettings}>
             Go to Settings
@@ -352,11 +450,11 @@ export function ProjectsPage({
         </div>
       )}
 
-      <div className="wave-page__header">
-        <div className="wave-page__header-row">
-          <div>
-            <h1 className="wave-page__title">Projects</h1>
-            <p className="wave-page__subtitle">Your podcast and audio editing projects</p>
+      <div className="wave-page__header" data-tauri-drag-region>
+        <div className="wave-page__header-row" data-tauri-drag-region>
+          <div data-tauri-drag-region>
+            <h1 className="wave-page__title" data-tauri-drag-region>Projects</h1>
+            <p className="wave-page__subtitle" data-tauri-drag-region>Your podcast and audio editing projects</p>
           </div>
           {projects.length > 0 && (
             <Button
@@ -366,7 +464,7 @@ export function ProjectsPage({
               size="sm"
               onClick={handleNewProjectClick}
             >
-              New Project
+              New project
             </Button>
           )}
         </div>
@@ -377,18 +475,9 @@ export function ProjectsPage({
           <InlineLoading description="Loading projects…" status="active" />
         </div>
       ) : projects.length === 0 ? (
-        <div className="wave-empty-state">
-          <IdleWaveform />
-          <h2 className="wave-empty-state__heading">No projects yet</h2>
-          <p className="wave-empty-state__body">
-            Import an audio file to start transcribing and editing with text.
-          </p>
-          <Button className="wave-btn-accent" kind="primary" renderIcon={Add} onClick={handleNewProjectClick}>
-            New Project
-          </Button>
-        </div>
+        <FirstRun hasReadyModel={hasReadyModel} onNewProject={handleNewProjectClick} onGoToSettings={onGoToSettings} />
       ) : (
-        <div className="wave-project-grid">
+        <div className="wave-project-grid" onKeyDown={(e) => gridKeys(e, (i) => setDeleteTarget(projects[i]))}>
           {projects.map((p) => (
             <ProjectCard
               key={p.id}
@@ -397,6 +486,7 @@ export function ProjectsPage({
               transcriptionPct={transcriptionProgress[p.id]}
               onClick={() => onOpenProject(p)}
               onDeleteRequest={() => setDeleteTarget(p)}
+              onRetry={() => onRetryProject(p)}
             />
           ))}
         </div>
@@ -413,21 +503,22 @@ export function ProjectsPage({
       {/* No-model gate modal */}
       <Modal
         open={showNoModelModal}
-        modalHeading="Download a model first"
-        primaryButtonText="Go to Settings"
+        modalHeading="Set up transcription first"
+        primaryButtonText="Open Settings"
         secondaryButtonText="Cancel"
         onRequestSubmit={() => { setShowNoModelModal(false); onGoToSettings(); }}
         onRequestClose={() => setShowNoModelModal(false)}
         onSecondarySubmit={() => setShowNoModelModal(false)}
         size="sm"
       >
-        <p style={{ lineHeight: 1.6, color: '#c6c6c6' }}>
-          Wave transcribes audio locally using a Whisper model running entirely on your Mac.
-          You need to download at least one model before creating a project.
+        <p className="wave-modal-text">
+          Wave transcribes audio locally, entirely on your Mac. Download the transcription
+          models once before creating a project.
         </p>
-        <p style={{ marginTop: 12, lineHeight: 1.6, color: '#8d8d8d', fontSize: 13 }}>
-          The <strong style={{ color: '#c6c6c6' }}>Small</strong> model (466 MB) is
-          recommended — fast and accurate on Apple Silicon.
+        <p className="wave-modal-text wave-modal-text--secondary">
+          <strong>Transcription</strong> (1.6 GB) is two models in one
+          download: Whisper writes the words, and a small alignment model places each one on its
+          exact audio, so text cuts are clean.
         </p>
       </Modal>
 
@@ -444,8 +535,8 @@ export function ProjectsPage({
         primaryButtonDisabled={deleting}
         size="sm"
       >
-        <p style={{ lineHeight: 1.6, color: '#c6c6c6' }}>
-          <strong style={{ color: '#f4f4f4' }}>{deleteTarget?.name}</strong> and all of its
+        <p className="wave-modal-text">
+          <strong>{deleteTarget?.name}</strong> and all of its
           files — audio, transcript, and edits — will be permanently deleted.
           This cannot be undone.
         </p>

@@ -2,11 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/svg+xml" href="/wave.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
     <title>Wave</title>
+    <!-- Applies before any script or stylesheet loads (in dev, Vite injects the
+         styles from JavaScript seconds later), so the first frame is already
+         the app's background rather than the WebView's white. -->
+    <style>
+      html, body { height: 100%; margin: 0; background: #161616; color: #f4f4f4; }
+    </style>
   </head>
-  <body>
+  <!-- Carbon g100 on the body too: menus, overflow menus and tooltips render
+       into <body> (outside the app's <Theme>), so they need the tokens here. -->
+  <body class="cds--g100">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

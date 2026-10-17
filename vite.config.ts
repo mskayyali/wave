@@ -17,8 +17,9 @@ export default defineConfig(async () => ({
   css: {
     preprocessorOptions: {
       scss: {
-        // Silence Sass deprecation warnings from Carbon's SCSS internals
-        silenceDeprecations: ['mixed-decls', 'color-functions', 'global-builtin', 'import'],
+        // Silence Sass deprecation warnings from Carbon's SCSS internals.
+        // ('mixed-decls' is gone: Sass made it obsolete and warns if it's listed.)
+        silenceDeprecations: ['color-functions', 'global-builtin', 'import'],
       },
     },
   },

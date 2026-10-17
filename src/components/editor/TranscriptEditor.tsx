@@ -2,23 +2,78 @@ import { useEffect, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import { TextSelection } from '@tiptap/pm/state';
 import StarterKit from '@tiptap/starter-kit';
+import { Extension } from '@tiptap/core';
 import { WordExtension } from './WordNode';
 import type { EnrichedWord } from '../../hooks/useTranscript';
+import type { SpeakerLabels } from '../../lib/speakers';
+import { followWord } from '../../lib/followWord';
 
 // ─── Document builder ─────────────────────────────────────────────────────────
+
+/**
+ * Something shown in the text that isn't a transcript word: a pause added by
+ * hand (id `p` + its edit's id), placed by time.
+ */
+export interface TextToken {
+  id:      string;
+  label:   string;
+  startMs: number;
+}
 
 // Gap ≥ this (ms) between real words → new paragraph.
 // Silence entries (isSilence=true) always force their own paragraph so that
 // the █ block appears as a standalone visual break rather than inline.
 const PARA_GAP_MS = 1500;
 
-function buildDocument(words: EnrichedWord[]) {
+/**
+ * A speaker's name over the paragraph where their turn starts: attributes on
+ * the paragraph, drawn by CSS (`p[data-speaker]::before`), so the label is
+ * never part of the text or of a selection.
+ */
+const SpeakerTurns = Extension.create({
+  name: 'speakerTurns',
+  addGlobalAttributes() {
+    return [{
+      types: ['paragraph'],
+      attributes: {
+        speaker: {
+          default:    null,
+          parseHTML:  (el) => el.getAttribute('data-speaker'),
+          renderHTML: (attrs) => (attrs.speaker ? { 'data-speaker': attrs.speaker } : {}),
+        },
+        speakerIndex: {
+          default:    null,
+          parseHTML:  (el) => el.getAttribute('data-speaker-index'),
+          renderHTML: (attrs) => (attrs.speakerIndex !== null ? { 'data-speaker-index': String(attrs.speakerIndex) } : {}),
+        },
+      },
+    }];
+  },
+});
+
+function buildDocument(words: EnrichedWord[], tokens: TextToken[] = [], speakers: SpeakerLabels | null = null) {
   if (words.length === 0) {
     return { type: 'doc', content: [{ type: 'paragraph', content: [] }] };
   }
 
-  const paragraphs: object[][] = [];
+  // Each paragraph remembers its speaker (that of its first word).
+  const paragraphs: { content: object[]; speaker: number | null }[] = [];
   let current: object[] = [];
+  let currentSpeaker: number | null = null;
+  let lastSpeaker: number | null = null;
+  const flush = () => {
+    if (current.length > 0) paragraphs.push({ content: current, speaker: currentSpeaker });
+    current = [];
+  };
+  // Tokens are placed by time: each goes before the first word that starts after it.
+  let nextToken = 0;
+  const pushToken = (t: TextToken) => {
+    if (current.length > 0) current.push({ type: 'text', text: ' ' });
+    current.push({
+      type:  'word',
+      attrs: { id: t.id, text: t.label, startMs: t.startMs, endMs: t.startMs, isPause: true },
+    });
+  };
 
   for (let i = 0; i < words.length; i++) {
     const w    = words[i];
@@ -31,10 +86,16 @@ function buildDocument(words: EnrichedWord[]) {
     const prevIsSilence = prev?.isSilence ?? false;
     const gapBreak      = i > 0 && !w.isSilence && !prevIsSilence &&
                           w.startMs - prev.endMs >= PARA_GAP_MS;
+    // A new speaker takes the floor: their turn starts a paragraph.
+    const speaker   = speakers?.of[i] ?? null;
+    const turnBreak = !w.isSilence && speaker !== null && lastSpeaker !== null && speaker !== lastSpeaker;
 
-    if (i > 0 && (w.isSilence || prevIsSilence || gapBreak)) {
-      if (current.length > 0) paragraphs.push(current);
-      current = [];
+    if (i > 0 && (w.isSilence || prevIsSilence || gapBreak || turnBreak)) flush();
+    if (current.length === 0) currentSpeaker = w.isSilence ? null : speaker;
+    if (!w.isSilence && speaker !== null) lastSpeaker = speaker;
+
+    while (!w.isSilence && nextToken < tokens.length && tokens[nextToken].startMs < w.startMs) {
+      pushToken(tokens[nextToken++]);
     }
 
     if (current.length > 0) {
@@ -51,32 +112,58 @@ function buildDocument(words: EnrichedWord[]) {
         confidence: w.confidence,
         deleted:   false,
         isSilence: w.isSilence,
+        correctedFrom: w.correctedFrom ?? null,
       },
     });
   }
 
-  if (current.length > 0) paragraphs.push(current);
+  while (nextToken < tokens.length) pushToken(tokens[nextToken++]);
+  flush();
 
+  // Label the paragraphs where the speaker changes.
+  let labelled: number | null = null;
   return {
     type:    'doc',
-    content: paragraphs.map((content) => ({ type: 'paragraph', content })),
+    content: paragraphs.map(({ content, speaker }) => {
+      const label = speakers && speaker !== null && speaker !== labelled;
+      if (label) labelled = speaker;
+      return label
+        ? { type: 'paragraph', attrs: { speaker: speakers.names[speaker] ?? `Speaker ${speaker + 1}`, speakerIndex: speaker }, content }
+        : { type: 'paragraph', content };
+    }),
   };
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
+
+/** A right-click on transcript words (or a token): what and where the menu goes. */
+export interface TranscriptContextEvent {
+  wordIndices: number[];
+  /** Set when the target is an added pause (its edit's id). */
+  pauseId?:    string;
+  clientX:     number;
+  clientY:     number;
+}
 
 interface TranscriptEditorProps {
   words:              EnrichedWord[];
   activeWordId:       string | null;
   onWordClick?:       (attrs: { id: string; startMs: number; endMs: number; text: string }) => void;
   onSelectionChange?: (range: { startMs: number; endMs: number } | null) => void;
+  onContextMenu?:     (e: TranscriptContextEvent) => void;
+  /** Added pauses to show between the words. */
+  tokens?:            TextToken[];
+  /** Who says each word: turns start paragraphs, labelled with the name. */
+  speakers?:          SpeakerLabels | null;
 }
 
-export function TranscriptEditor({ words, activeWordId, onWordClick, onSelectionChange }: TranscriptEditorProps) {
+export function TranscriptEditor({ words, activeWordId, onWordClick, onSelectionChange, onContextMenu, tokens, speakers = null }: TranscriptEditorProps) {
   // Refs keep callbacks and data fresh inside the one-time useEditor closure
   const onSelectionChangeRef = useRef(onSelectionChange);
+  const onContextMenuRef     = useRef(onContextMenu);
   const wordsRef             = useRef(words);
   useEffect(() => { onSelectionChangeRef.current = onSelectionChange; }, [onSelectionChange]);
+  useEffect(() => { onContextMenuRef.current = onContextMenu; }, [onContextMenu]);
   useEffect(() => { wordsRef.current = words; }, [words]);
 
   // When the user clicks a word (mousedown on a word span), ProseMirror places
@@ -103,8 +190,9 @@ export function TranscriptEditor({ words, activeWordId, onWordClick, onSelection
         listItem:       false,
       }),
       WordExtension,
+      SpeakerTurns,
     ],
-    content: buildDocument(words),
+    content: buildDocument(words, tokens, speakers),
 
     // ── Use ProseMirror's internal selection (bypasses contenteditable DOM quirks)
     onSelectionUpdate({ editor: ed }) {
@@ -163,10 +251,22 @@ export function TranscriptEditor({ words, activeWordId, onWordClick, onSelection
       handleDOMEvents: {
         mousedown(_view, e) {
           const target = e.target as HTMLElement;
-          if (target.closest('[data-word-id]')) {
+          if (e.button === 0 && target.closest('[data-word-id]')) {
             suppressNextClear.current = true;
           }
           return false; // let ProseMirror continue processing normally
+        },
+        // Right-click a word → show it in the timeline (EditorPage decides
+        // whether that means the word or the selection around it).
+        contextmenu(_view, e) {
+          const el = (e.target as HTMLElement).closest<HTMLElement>('[data-word-id]');
+          const cb = onContextMenuRef.current;
+          if (!el || !cb) return false;
+          e.preventDefault();
+          const id = el.dataset.wordId ?? '';
+          if (id.startsWith('p')) cb({ wordIndices: [], pauseId: id.slice(1), clientX: e.clientX, clientY: e.clientY });
+          else cb({ wordIndices: [parseInt(id.slice(1), 10)], clientX: e.clientX, clientY: e.clientY });
+          return true;
         },
       },
 
@@ -185,12 +285,17 @@ export function TranscriptEditor({ words, activeWordId, onWordClick, onSelection
     },
   });
 
-  // Rebuild when words change
+  // Rebuild when the words, the added pauses or the speakers shown change
+  const activeWordIdRef = useRef(activeWordId);
+  activeWordIdRef.current = activeWordId;
   useEffect(() => {
     if (editor && !editor.isDestroyed) {
-      editor.commands.setContent(buildDocument(words));
+      editor.commands.setContent(buildDocument(words, tokens, speakers));
+      // The rebuild drops the playing word's mark; put it back without scrolling.
+      const id = activeWordIdRef.current;
+      if (id) document.querySelector(`.wave-transcript-editor [data-word-id="${id}"]`)?.classList.add('wave-word--active');
     }
-  }, [words, editor]);
+  }, [words, tokens, speakers, editor]);
 
   // ── DOM-based active-word highlight (no re-render, runs at word boundaries) ──
   useEffect(() => {
@@ -203,7 +308,7 @@ export function TranscriptEditor({ words, activeWordId, onWordClick, onSelection
       );
       if (el) {
         el.classList.add('wave-word--active');
-        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        followWord(el);
       }
     }
   }, [activeWordId]);

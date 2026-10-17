@@ -1,0 +1,5 @@
+# The oldest macOS Wave runs on. ONNX Runtime's prebuilt library (ort) needs
+# 13.4; without this, whisper.cpp (built by CMake) targets whichever macOS
+# built it. Keep in step with bundle.macOS.minimumSystemVersion in tauri.conf.json.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "13.4"

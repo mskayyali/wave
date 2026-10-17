@@ -14,6 +14,8 @@ const RATES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 
 interface PlaybackControlsProps {
   isPlaying: boolean;
+  /** The audio is decoded; until then a press plays as soon as it is. */
+  ready?:    boolean;
   currentMs: number;
   durationMs: number;
   rate: number;
@@ -23,7 +25,7 @@ interface PlaybackControlsProps {
 }
 
 export function PlaybackControls({
-  isPlaying, currentMs, durationMs, rate,
+  isPlaying, ready = true, currentMs, durationMs, rate,
   onToggle, onSeek, onRateChange,
 }: PlaybackControlsProps) {
   return (
@@ -40,10 +42,11 @@ export function PlaybackControls({
 
       {/* Play / Pause */}
       <button
-        className="wave-playback__play-btn"
+        className={`wave-playback__play-btn${ready ? '' : ' wave-playback__play-btn--waiting'}`}
         onClick={onToggle}
-        title={isPlaying ? 'Pause  (Space)' : 'Play  (Space)'}
+        title={!ready ? 'Preparing audio… (plays as soon as it is ready)' : isPlaying ? 'Pause  (Space)' : 'Play  (Space)'}
         aria-label={isPlaying ? 'Pause' : 'Play'}
+        aria-busy={!ready}
       >
         {isPlaying ? (
           <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
@@ -80,6 +83,7 @@ export function PlaybackControls({
           <button
             key={r}
             className={`wave-playback__speed-btn${r === rate ? ' wave-playback__speed-btn--active' : ''}`}
+            aria-pressed={r === rate}
             onClick={() => onRateChange(r)}
             title={`${r}× speed`}
           >

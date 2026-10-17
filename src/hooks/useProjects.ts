@@ -27,6 +27,13 @@ export interface ImportProgress {
   percentage: number;
 }
 
+/** Audio files Wave imports (the file picker and drag and drop). */
+export const AUDIO_EXTENSIONS = ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'mp4', 'aiff', 'aif'];
+
+export function isAudioFile(path: string): boolean {
+  return AUDIO_EXTENSIONS.includes(path.split('.').pop()?.toLowerCase() ?? '');
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useProjects() {
@@ -61,7 +68,7 @@ export function useProjects() {
       directory: false,
       filters: [{
         name: 'Audio Files',
-        extensions: ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'mp4', 'aiff'],
+        extensions: AUDIO_EXTENSIONS,
       }],
     });
     if (!result) return null;

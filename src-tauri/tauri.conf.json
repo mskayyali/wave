@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "wave",
-  "version": "0.1.0",
+  "productName": "Wave",
+  "version": "../package.json",
   "identifier": "com.mskayyali.wave",
   "build": {
     "beforeDevCommand": "bun run dev",
@@ -10,13 +10,19 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "wave",
+        "title": "Wave",
         "width": 1280,
         "height": 820,
         "minWidth": 960,
-        "minHeight": 600
+        "minHeight": 600,
+        "backgroundColor": "#161616",
+        "theme": "Dark",
+        "visible": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {
@@ -36,6 +42,14 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "vendor/lame/README.md": "licenses/LAME.md",
+      "vendor/lame/COPYING": "licenses/LAME-COPYING.txt"
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.4",
+      "frameworks": ["vendor/lame/libmp3lame.0.dylib"]
+    }
   }
 }

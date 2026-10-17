@@ -1,10 +1,14 @@
 import { useRef, useCallback, useState, useEffect } from 'react';
-import { Select_01 as CursorIcon, Cut, Repeat, ZoomIn, ZoomOut } from '@carbon/icons-react';
+import { Select_01 as CursorIcon, Cut, Repeat, TextSelection, ZoomIn, ZoomOut, ZoomArea } from '@carbon/icons-react';
 import { PlaybackControls } from './PlaybackControls';
 import type { useWaveform } from '../../hooks/useWaveform';
 import type { EnrichedWord } from '../../hooks/useTranscript';
+import { speakerColor, type SpeakerTurn } from '../../lib/speakers';
 
 type Tool = 'cursor' | 'blade';
+
+const EMPTY_SET: ReadonlySet<number> = new Set();
+const EMPTY_TURNS: SpeakerTurn[] = [];
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -12,6 +16,21 @@ type Tool = 'cursor' | 'blade';
 function fmtDur(ms: number): string {
   const s = ms / 1000;
   return s < 10 ? `${s.toFixed(1)}s` : `${Math.round(s)}s`;
+}
+
+/** Position to the millisecond: "5:35.123". */
+function fmtClock(ms: number): string {
+  const s = Math.max(0, ms) / 1000;
+  return `${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, '0')}`;
+}
+
+/** Selection length: "84 ms", "1.250s", "12.3s", "1:07.4". */
+function fmtLength(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  const s = ms / 1000;
+  if (s < 10) return `${s.toFixed(3)}s`;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
 }
 
 // ─── Time ruler ───────────────────────────────────────────────────────────────
@@ -100,16 +119,28 @@ const MIN_GAP_MS   = 60;  // don't badge gaps shorter than this
 interface WaveWordTrackProps {
   words:              EnrichedWord[];
   deletedWordIndices: ReadonlySet<number>;
+  partCutWordIndices: ReadonlySet<number>;
+  fullCutWordIndices: ReadonlySet<number>;
   selectionRange:     { startMs: number; endMs: number } | null;
+  referenceRange:     { startMs: number; endMs: number } | null;
   durationMs:         number;
   zoomLevel:          number;
   wrapperScrollLeft:  number;
   onWordClick:        (word: EnrichedWord, index: number) => void;
+  /** Right-click on a word chip: the same menu as on the waveform at that word. */
+  onContextMenuAt?:   (ms: number, clientX: number, clientY: number) => void;
+  /** Who has the floor when: a coloured strip along the bottom of the lane. */
+  speakerTurns:       SpeakerTurn[];
+  speakerNames?:      Record<number, string>;
+  /** Words selected individually (everything one speaker said). */
+  selectedWordIndices: ReadonlySet<number> | null;
+  /** The speaker those words belong to; their turns are emphasised. */
+  selectedSpeaker:    number | null;
 }
 
 function WaveWordTrack({
-  words, deletedWordIndices, selectionRange,
-  durationMs, zoomLevel, wrapperScrollLeft, onWordClick,
+  words, deletedWordIndices, partCutWordIndices, fullCutWordIndices, selectionRange, referenceRange,
+  durationMs, zoomLevel, wrapperScrollLeft, onWordClick, onContextMenuAt, speakerTurns, speakerNames, selectedWordIndices, selectedSpeaker,
 }: WaveWordTrackProps) {
   const outerRef = useRef<HTMLDivElement>(null);
   const [contW, setContW] = useState(0);
@@ -155,16 +186,29 @@ function WaveWordTrack({
 
       const chipPx = (w.endMs - w.startMs) * pxPerMs;
       if (chipPx >= MIN_CHIP_PX) {
-        const isDeleted  = deletedWordIndices.has(i);
-        const isSelected = selectionRange != null &&
+        // Cut as a word, or swallowed whole by a cut drawn on the waveform.
+        const isDeleted  = deletedWordIndices.has(i) || fullCutWordIndices.has(i);
+        const isPartCut  = !isDeleted && partCutWordIndices.has(i);
+        const touched    = selectionRange != null &&
                            w.startMs < selectionRange.endMs &&
                            w.endMs   > selectionRange.startMs;
+        const isSelected = (selectedWordIndices?.has(i) ?? false) || (touched &&
+                           w.startMs >= selectionRange.startMs - 1 &&
+                           w.endMs   <= selectionRange.endMs + 1);
+        const isSelPart  = touched && !isSelected;
+        const isReference = referenceRange != null &&
+                            w.startMs >= referenceRange.startMs &&
+                            w.endMs   <= referenceRange.endMs;
 
         const cls = [
           'wave-word-chip',
           w.isSilence ? 'wave-word-chip--silence' : '',
           isDeleted   ? 'wave-word-chip--deleted'  : '',
+          isPartCut   ? 'wave-word-chip--partcut'  : '',
           isSelected && !isDeleted ? 'wave-word-chip--selected' : '',
+          isSelPart  && !isDeleted ? 'wave-word-chip--selected-part' : '',
+          isReference ? 'wave-word-chip--reference' : '',
+          w.correctedFrom !== undefined ? 'wave-word-chip--corrected' : '',
         ].filter(Boolean).join(' ');
 
         // Silence chips show their duration; real word chips show the text.
@@ -178,7 +222,9 @@ function WaveWordTrack({
               left:  `${(w.startMs / durationMs) * 100}%`,
               width: `${((w.endMs - w.startMs) / durationMs) * 100}%`,
             }}
-            title={w.isSilence ? `${fmtDur(w.endMs - w.startMs)} silence` : w.text}
+            data-ms={(w.startMs + w.endMs) / 2}
+            title={w.isSilence ? `${fmtDur(w.endMs - w.startMs)} silence`
+              : w.correctedFrom !== undefined ? `${w.text} · corrected from "${w.correctedFrom}"` : w.text}
             onClick={() => onWordClick(w, i)}
           >
             {label}
@@ -219,8 +265,46 @@ function WaveWordTrack({
     }
   }
 
+  // Speaker turns in view, as a strip under the chips.
+  if (ready && speakerTurns.length > 0) {
+    const pxPerMs  = (contW * zoomLevel) / durationMs;
+    const visStart = wrapperScrollLeft / pxPerMs;
+    const visEnd   = (wrapperScrollLeft + contW) / pxPerMs;
+    let lo = 0, hi = speakerTurns.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (speakerTurns[mid].endMs <= visStart) lo = mid + 1; else hi = mid;
+    }
+    for (let t = lo; t < speakerTurns.length && speakerTurns[t].startMs <= visEnd; t++) {
+      const turn = speakerTurns[t];
+      const dimmed = selectedSpeaker !== null && turn.speaker !== selectedSpeaker;
+      chips.push(
+        <div
+          key={`s${t}`}
+          className={`wave-speaker-turn${dimmed ? ' wave-speaker-turn--dimmed' : ''}`}
+          style={{
+            left:       `${(turn.startMs / durationMs) * 100}%`,
+            width:      `${((turn.endMs - turn.startMs) / durationMs) * 100}%`,
+            background: speakerColor(turn.speaker),
+          }}
+          title={speakerNames?.[turn.speaker] ?? `Speaker ${turn.speaker + 1}`}
+        />
+      );
+    }
+  }
+
   return (
-    <div ref={outerRef} className="wave-word-track" aria-hidden>
+    <div
+      ref={outerRef}
+      className="wave-word-track"
+      aria-hidden
+      onContextMenu={(e) => {
+        const chip = (e.target as HTMLElement).closest<HTMLElement>('[data-ms]');
+        if (!chip || !onContextMenuAt) return;
+        e.preventDefault();
+        onContextMenuAt(Number(chip.dataset.ms), e.clientX, e.clientY);
+      }}
+    >
       {ready && (
         <div
           className="wave-word-track__inner"
@@ -240,17 +324,42 @@ function WaveWordTrack({
 
 interface WaveformTimelineProps {
   waveform:           ReturnType<typeof useWaveform>;
-  onSelectionChange:  (range: { startMs: number; endMs: number } | null) => void;
+  /** `free`: drawn with ⌥ held, so it shouldn't snap to word edges. */
+  onSelectionChange:  (range: { startMs: number; endMs: number } | null, free?: boolean) => void;
   isLooping:          boolean;
   hasSelection:       boolean;
   onLoopToggle:       () => void;
   onDeleteAtMs?:      (ms: number) => void;
-  /** Enriched transcript words — used for the word track and snap-to-word. */
+  /** An edge of cut `index` was dragged on the waveform. */
+  onCutResize?:       (index: number, startMs: number, endMs: number) => void;
+  /** Double-click on the waveform at `ms`. */
+  onDoubleClickAt?:   (ms: number) => void;
+  /** Right-click on the waveform at `ms`. */
+  onContextMenuAt?:   (ms: number, clientX: number, clientY: number) => void;
+  /** The mouse is over `ms` on the waveform (null when it leaves). */
+  onHoverAt?:         (ms: number | null) => void;
+  /** Passage marked for reference from the transcript (outlined). */
+  referenceRange?:    { startMs: number; endMs: number } | null;
+  /** Drawn selections snap to word edges (off by default: the waveform is for exact edits). */
+  snapToWords?:       boolean;
+  onSnapToggle?:      () => void;
+  /** Words partly / entirely inside a cut made on the waveform (not deleted as words). */
+  partCutWordIndices?: ReadonlySet<number>;
+  fullCutWordIndices?: ReadonlySet<number>;
+  /** Enriched transcript words — drawn in the word track above the waveform. */
   words?:             EnrichedWord[];
   /** Indices into `words[]` that have been deleted (shown with red tint). */
   deletedWordIndices?: ReadonlySet<number>;
   /** Current selection range (highlighted in the word track). */
   selectionRange?:    { startMs: number; endMs: number } | null;
+  /** Speaker turns for the strip under the word lane (empty when hidden). */
+  speakerTurns?:      SpeakerTurn[];
+  speakerNames?:      Record<number, string>;
+  /** Words selected individually (everything one speaker said), and their speaker. */
+  selectedWordIndices?: ReadonlySet<number> | null;
+  selectedSpeaker?:   number | null;
+  /** Readout for a selection that isn't one stretch of audio. */
+  selectionLabel?:    string | null;
   /** Total height of the waveform panel in pixels. */
   panelHeight?:       number;
   /** Called when the user drags the resize handle to a new height. */
@@ -259,87 +368,52 @@ interface WaveformTimelineProps {
 
 export function WaveformTimeline({
   waveform, onSelectionChange, isLooping, hasSelection, onLoopToggle,
-  onDeleteAtMs, words = [], deletedWordIndices = new Set(), selectionRange = null,
+  onDeleteAtMs, onCutResize, onDoubleClickAt, onContextMenuAt, onHoverAt,
+  words = [], deletedWordIndices = new Set(), selectionRange = null,
+  referenceRange = null, snapToWords = false, onSnapToggle,
+  partCutWordIndices = EMPTY_SET, fullCutWordIndices = EMPTY_SET,
+  speakerTurns = EMPTY_TURNS, speakerNames, selectedWordIndices = null, selectedSpeaker = null, selectionLabel = null,
   panelHeight = 240, onPanelHeightChange,
 }: WaveformTimelineProps) {
   const [activeTool, setActiveTool] = useState<Tool>('cursor');
-  const dragRef        = useRef<{ startX: number; startMs: number } | null>(null);
+  /** The selection while it's being drawn or resized (for the readout). */
+  const [liveSelection, setLiveSelection] = useState<{ startMs: number; endMs: number } | null>(null);
   const resizeDragRef  = useRef<{ startY: number; startH: number } | null>(null);
-  const overlayRef     = useRef<HTMLDivElement>(null);
   const timelineRef    = useRef<HTMLDivElement>(null);
 
   const {
     containerRef, isPlaying, currentMs, durationMs, rate, waveLoading,
-    toggle, seek, setRate, setSelectionRegion, clearSelectionRegion,
+    toggle, seek, setRate, handlers,
     zoomLevel, wrapperScrollLeft, setZoom, getWsScroll, setWsScroll,
-    forceRedraw,
+    forceRedraw, zoomToRange,
   } = waveform;
 
-  // ── xToMs ─────────────────────────────────────────────────────────────────
-  // Convert a clientX to a timestamp, reading scroll live from the DOM (not
-  // stale state) so accuracy is maintained during fast scrolling.
-  const xToMs = useCallback((clientX: number): number => {
-    const el = overlayRef.current;
-    if (!el || durationMs <= 0) return 0;
-    const rect       = el.getBoundingClientRect();
-    const localX     = Math.max(0, Math.min(clientX - rect.left, rect.width));
-    const scrollLeft = getWsScroll();
-    const totalPx    = rect.width * zoomLevelRef.current;
-    return Math.max(0, Math.min((scrollLeft + localX) / totalPx, 1)) * durationMs;
-  }, [durationMs, getWsScroll]);
-
-  // ── Waveform pointer handlers ─────────────────────────────────────────────
-  const handlePointerDown = useCallback((e: React.PointerEvent) => {
-    if (activeTool !== 'cursor' && activeTool !== 'blade') return;
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    dragRef.current = { startX: e.clientX, startMs: xToMs(e.clientX) };
-  }, [activeTool, xToMs]);
-
-  const handlePointerMove = useCallback((e: React.PointerEvent) => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    if (Math.abs(e.clientX - drag.startX) < 4) return;
-    const ms    = xToMs(e.clientX);
-    const start = Math.min(drag.startMs, ms);
-    const end   = Math.max(drag.startMs, ms);
-    if (end - start > 10) setSelectionRegion(start, end);
-  }, [xToMs, setSelectionRegion]);
-
-  const handlePointerUp = useCallback((e: React.PointerEvent) => {
-    const drag = dragRef.current;
-    dragRef.current = null;
-    if (!drag) return;
-
-    const moved = Math.abs(e.clientX - drag.startX);
-
-    if (activeTool === 'blade' && moved < 6) {
-      // Use startMs captured at pointerDown — more accurate than recalculating at
-      // pointerUp where scroll/zoom may have changed since the click began.
-      onDeleteAtMs?.(drag.startMs);
-      return;
-    }
-
-    if (moved < 6) {
-      // For a tap/click, use the position measured at pointerDown.
-      // Recalculating xToMs(e.clientX) here can return wrong results if a
-      // pending zoom RAF fired between pointerDown and pointerUp, resetting
-      // the WaveSurfer scroll position before we read it.
-      seek(drag.startMs);
-      clearSelectionRegion();
-      onSelectionChange(null);
-    } else {
-      // Drag selection: use exact time positions — no word snapping.
-      // Snapping is only applied when a word chip or transcript word is
-      // explicitly clicked, giving users pixel-accurate control for editing
-      // silence gaps, cutting mid-word, or working with inexact transcriptions.
-      const rawEnd   = xToMs(e.clientX);
-      const startMs  = Math.min(drag.startMs, rawEnd);
-      const endMs    = Math.max(drag.startMs, rawEnd);
-      if (endMs - startMs > 10) {
-        onSelectionChange({ startMs, endMs });
-      }
-    }
-  }, [xToMs, seek, clearSelectionRegion, onSelectionChange, activeTool, onDeleteAtMs]);
+  // ── Waveform interactions (wavesurfer.js handles the pointer itself) ──────
+  //  • click        → seek (cursor tool also clears the selection; blade cuts the word)
+  //  • double-click → select the word there, or the pause between words
+  //  • drag         → draw a selection (edges snap to words; ⌥ for free); drag its edges to adjust it
+  //  • drag a red cut's edge → nudge that cut boundary
+  //  • right-click  → menu for the cut / selection / word / pause there
+  handlers.current = {
+    onClick: (ms) => {
+      if (activeTool === 'blade') onDeleteAtMs?.(ms);
+      else onSelectionChange(null);
+    },
+    onDoubleClick: (ms) => {
+      if (activeTool === 'cursor') onDoubleClickAt?.(ms);
+    },
+    canSelect: () => activeTool === 'cursor',
+    onSelectionChange: (range, free) => {
+      setLiveSelection(null);
+      if (range.endMs - range.startMs >= 1) onSelectionChange(range, free);
+    },
+    onSelectionLive: setLiveSelection,
+    onCutResize,
+    onContextMenu: onContextMenuAt,
+    onHover: onHoverAt,
+  };
+  const zoomTarget = selectionRange ?? referenceRange;
+  const readout    = liveSelection ?? selectionRange;
 
   // ── Wheel / pinch — registered on the whole timeline div ─────────────────
   // Attaching to the outer container (not just the overlay) means zoom and
@@ -351,9 +425,17 @@ export function WaveformTimeline({
     function onWheel(e: WheelEvent) {
       e.preventDefault();
       if (e.ctrlKey) {
-        // Trackpad pinch or Ctrl+scroll → zoom.
+        // Trackpad pinch or Ctrl+scroll → zoom, keeping the time under the
+        // cursor fixed (as Audition and Audacity do).
+        const canvas = containerRef.current;
+        let anchorMs: number | null = null;
+        if (canvas && durationMs > 0) {
+          const rect     = canvas.getBoundingClientRect();
+          const pxPerSec = (rect.width * zoomLevelRef.current) / (durationMs / 1000);
+          anchorMs = ((getWsScroll() + (e.clientX - rect.left)) / pxPerSec) * 1000;
+        }
         const delta = -e.deltaY * 0.005;
-        setZoom(zoomLevelRef.current * (1 + delta));
+        setZoom(zoomLevelRef.current * (1 + delta), anchorMs ?? 'auto');
       } else {
         // Two-finger swipe → horizontal scroll.
         const dx = e.deltaX !== 0 ? e.deltaX : e.deltaY;
@@ -364,7 +446,7 @@ export function WaveformTimeline({
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setZoom, setWsScroll, getWsScroll]);
+  }, [setZoom, setWsScroll, getWsScroll, containerRef, durationMs]);
 
   const zoomLevelRef = useRef(zoomLevel);
   zoomLevelRef.current = zoomLevel;
@@ -433,6 +515,17 @@ export function WaveformTimeline({
           </button>
         ))}
 
+        <button
+          className={`wave-tool-btn${snapToWords ? ' wave-tool-btn--active' : ''}`}
+          title={snapToWords
+            ? 'Snap to words: on — selection edges near a word edge land on it (⌥ to place freely)'
+            : 'Snap to words: off — selections are exactly what you drag'}
+          onClick={onSnapToggle}
+          aria-pressed={snapToWords}
+        >
+          <TextSelection size={14} />
+        </button>
+
         <div className="wave-tool-divider" />
 
         <button
@@ -449,7 +542,7 @@ export function WaveformTimeline({
         <button
           className="wave-tool-btn"
           title="Zoom out  (−)"
-          onClick={() => setZoom(zoomLevel / 1.5)}
+          onClick={() => setZoom(zoomLevelRef.current / 1.5)}
           disabled={zoomLevel <= 1}
         >
           <ZoomOut size={14} />
@@ -464,19 +557,44 @@ export function WaveformTimeline({
         <button
           className="wave-tool-btn"
           title="Zoom in  (+)"
-          onClick={() => setZoom(zoomLevel * 1.5)}
+          onClick={() => setZoom(zoomLevelRef.current * 1.5)}
         >
           <ZoomIn size={14} />
+        </button>
+
+        <button
+          className={`wave-tool-btn${zoomTarget ? '' : ' wave-tool-btn--disabled'}`}
+          title={zoomTarget ? 'Zoom to selection  (Z)' : 'Select something to zoom to it'}
+          onClick={zoomTarget ? () => zoomToRange(zoomTarget.startMs, zoomTarget.endMs) : undefined}
+        >
+          <ZoomArea size={14} />
         </button>
 
         {zoomLevel > 1.01 && (
           <button
             className="wave-tool-btn wave-tool-btn--text"
-            title="Reset zoom  (⌘0)"
+            title="Whole file  (⇧Z)"
             onClick={() => setZoom(1)}
           >
             1×
           </button>
+        )}
+
+        {selectionLabel && !readout && (
+          <span className="wave-selection-readout" title="⌫ deletes these words as one edit · Esc clears">
+            {selectionLabel}
+          </span>
+        )}
+        {readout && (
+          <span
+            className="wave-selection-readout"
+            title={'Selection: start – end (length).\n'
+              + '⇧←/→ moves its end, ⌥⇧←/→ its start (10 ms; add ⌘ for 1 ms).\n'
+              + 'C previews it cut; ⌫ cuts exactly this.'}
+          >
+            {fmtClock(readout.startMs)} – {fmtClock(readout.endMs)}
+            <span className="wave-selection-readout__len">{fmtLength(readout.endMs - readout.startMs)}</span>
+          </span>
         )}
       </div>
 
@@ -492,27 +610,27 @@ export function WaveformTimeline({
       <WaveWordTrack
         words={words}
         deletedWordIndices={deletedWordIndices}
+        partCutWordIndices={partCutWordIndices}
+        fullCutWordIndices={fullCutWordIndices}
         selectionRange={selectionRange}
+        referenceRange={referenceRange}
         durationMs={durationMs}
         zoomLevel={zoomLevel}
         wrapperScrollLeft={wrapperScrollLeft}
         onWordClick={handleWordChipClick}
+        onContextMenuAt={onContextMenuAt}
+        speakerTurns={speakerTurns}
+        speakerNames={speakerNames}
+        selectedWordIndices={selectedWordIndices}
+        selectedSpeaker={selectedSpeaker}
       />
 
       {/* ── Waveform canvas + overlay ────────────────────────────────────── */}
       <div className="wave-waveform-wrapper">
         <div
           ref={containerRef}
-          className="wave-waveform-canvas"
+          className={`wave-waveform-canvas wave-waveform-canvas--${activeTool}`}
           data-loading={waveLoading || undefined}
-        />
-
-        <div
-          ref={overlayRef}
-          className={`wave-waveform-overlay wave-waveform-overlay--${activeTool}`}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
         />
       </div>
 
@@ -520,6 +638,7 @@ export function WaveformTimeline({
       <div className="wave-timeline-controls">
         <PlaybackControls
           isPlaying={isPlaying}
+          ready={waveform.audioReady}
           currentMs={currentMs}
           durationMs={durationMs}
           rate={rate}

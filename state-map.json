@@ -1,0 +1,354 @@
+{
+  "$schema": "https://stateful.design/schema/state-map.json",
+  "system_sentence": "Wave is a local-first, Mac-native text-based audio editor. This map spans three surfaces — Editor, Projects, and Settings/Models — whose individual structural sentences are recorded in STATEFUL.md; the Editor's anchors the set: a persistent, non-destructive editing session layering a revisable queue of time-range cuts over immutable transcribed audio, reconciled from disk on each re-entry and resolved into new audio only at export.",
+  "states": [
+    {
+      "id": "ed-idle",
+      "name": "Editor idle, ready",
+      "category": "active",
+      "scope": "in",
+      "description": "Transcript rendered, audio loaded, paused at 0, no selection, no edits.",
+      "layers": ["frontend"]
+    },
+    {
+      "id": "ed-playing",
+      "name": "Playing with word highlight",
+      "category": "active",
+      "scope": "in",
+      "description": "Playhead advancing; active word located by binary search and highlighted via direct DOM.",
+      "layers": ["frontend"]
+    },
+    {
+      "id": "ed-editing-cuts",
+      "name": "Editing session with a cut queue",
+      "category": "active",
+      "scope": "in",
+      "description": "A non-empty revisable queue of cuts over the recording, persisted to edits.json.",
+      "layers": ["frontend", "data-model"],
+      "reentry_variants": [
+        { "context": "Q1 — return after time has passed", "specification": "Cut queue restored from edits.json (editsLoadedRef guard); playhead resets to 0. Reload assumes the transcript is byte-identical to the one the indices were written against — see Q4." },
+        { "context": "Q2 — notification / deep link / different device", "specification": "Not applicable: local single-window desktop app." },
+        { "context": "Q3 — arrive without the preceding state", "specification": "Non-ready projects show a hint; a ready project with zero transcript words is not distinguished (gap ed-g2)." },
+        { "context": "Q4 — underlying data changed", "specification": "Re-transcription rewrites transcript.json while edits.json keeps positional indices; nothing revalidates (gap ed-g1). Fingerprint edits against the transcript; invalidate or remap on mismatch and notify." },
+        { "context": "Q5 — arrive during/after a failure", "specification": "Corrupt edits.json (crash mid-save) is silently discarded by the start-fresh catch; back it up and notify instead." }
+      ]
+    },
+    {
+      "id": "ed-nontext-cut",
+      "name": "Non-text region cut",
+      "category": "active",
+      "scope": "in",
+      "description": "A cut of audio with no transcript word attached (breath, pause, room tone), spliced gently at export.",
+      "layers": ["frontend", "backend"]
+    },
+    {
+      "id": "ed-exporting",
+      "name": "Exporting (busy)",
+      "category": "active",
+      "scope": "in",
+      "description": "Transcript or full-fidelity audio export in progress.",
+      "layers": ["frontend", "backend"]
+    },
+    {
+      "id": "ed-g1",
+      "name": "Stale edit indices after re-transcription",
+      "category": "boundary",
+      "scope": "in",
+      "description": "Positional cut indices in edits.json have no link to the transcript version; re-transcription silently re-points them (src/pages/EditorPage.tsx:275).",
+      "layers": ["frontend", "data-model"],
+      "cause": "system"
+    },
+    {
+      "id": "ed-g2",
+      "name": "Transcript present but zero words",
+      "category": "rendering",
+      "scope": "in",
+      "description": "Non-speech/silent/wrong-language audio yields words:[] at status Ready; blank editor over real audio (TranscriptEditor.tsx:16; EditorPage.tsx:136).",
+      "layers": ["frontend"]
+    },
+    {
+      "id": "ed-g3",
+      "name": "All audio unavailable",
+      "category": "failure",
+      "scope": "in",
+      "description": "Original undecodable and 16 kHz WAV missing; fallback ends at console.warn (EditorPage.tsx:342); waveform never loads, no error surface.",
+      "layers": ["frontend", "backend"],
+      "cause": "system"
+    },
+    {
+      "id": "ed-g4",
+      "name": "Transcript-export failure",
+      "category": "failure",
+      "scope": "in",
+      "description": "Caught to console.error only (InspectorPanel.tsx:72); unlike audio export, no inline surface.",
+      "layers": ["frontend"],
+      "cause": "system"
+    },
+    {
+      "id": "ed-g10",
+      "name": "Interaction before audio decodes",
+      "category": "boundary",
+      "scope": "in",
+      "description": "waveLoading tracked but clicks/keys are live during decode; a seek/cut can land before durationMs is known.",
+      "layers": ["frontend"]
+    },
+    {
+      "id": "ed-g5",
+      "name": "edits.json save failure",
+      "category": "boundary",
+      "scope": "out-with-implication",
+      "description": "Save rejection swallowed at console.warn (EditorPage.tsx:374); cuts silently unpersisted.",
+      "layers": ["frontend", "data-model"],
+      "cause": "system",
+      "scope_note": "Add a persistent 'changes not saved' indicator; the data model is already adequate."
+    },
+    {
+      "id": "ed-g6",
+      "name": "All audio deleted (empty export)",
+      "category": "failure",
+      "scope": "out-with-implication",
+      "description": "Cutting every word + range produces a near-empty WAV with no floor or warning.",
+      "layers": ["frontend", "backend"],
+      "cause": "user-input",
+      "scope_note": "Disable/confirm export when no audio survives; reflect survivor length in the button."
+    },
+    {
+      "id": "ed-g7",
+      "name": "Screen-reader / keyboard rendering",
+      "category": "rendering",
+      "scope": "out-with-implication",
+      "description": "Waveform, ruler and word-track are aria-hidden; editing is pointer-only.",
+      "layers": ["frontend"],
+      "scope_note": "Word nodes already carry data-* timing attrs; an a11y layer can build on them."
+    },
+    {
+      "id": "ed-g8",
+      "name": "External change to on-disk transcript/audio",
+      "category": "boundary",
+      "scope": "out-with-implication",
+      "description": "No detection; the editor trusts on-disk files at mount.",
+      "layers": ["frontend", "data-model"],
+      "cause": "external",
+      "scope_note": "Becomes in-scope with any sync/multi-device story (see ed-g1)."
+    },
+    {
+      "id": "ed-g9",
+      "name": "Very long recording in memory",
+      "category": "boundary",
+      "scope": "out",
+      "description": "splice loads the entire file to RAM (~230 MB/60 min).",
+      "layers": ["backend", "infrastructure"],
+      "scope_note": "Streaming splice; in-scope for long-form podcasts."
+    },
+
+    {
+      "id": "pr-empty",
+      "name": "Empty library",
+      "category": "rendering",
+      "scope": "in",
+      "description": "No projects — idle-waveform empty state with New Project CTA.",
+      "layers": ["frontend"]
+    },
+    {
+      "id": "pr-library",
+      "name": "Library listed",
+      "category": "active",
+      "scope": "in",
+      "description": "Project cards in a grid, sorted by created_at desc.",
+      "layers": ["frontend"]
+    },
+    {
+      "id": "pr-importing",
+      "name": "Importing with progress",
+      "category": "active",
+      "scope": "in",
+      "description": "Amber progress bar; decode → resample → 16 kHz WAV in the background.",
+      "layers": ["frontend", "backend"]
+    },
+    {
+      "id": "pr-transcribing",
+      "name": "Transcribing",
+      "category": "active",
+      "scope": "in",
+      "description": "Teal progress bar; local Whisper running.",
+      "layers": ["frontend", "backend"],
+      "reentry_variants": [
+        { "context": "Q1 — return after time has passed", "specification": "Returning after quitting mid-transcription finds a permanently-Transcribing card; list_projects repairs stale Importing only (gap pr-g1)." },
+        { "context": "Q4 — underlying data changed", "specification": "The selected model deleted mid-run causes failure with no in-flight recovery." },
+        { "context": "Q5 — arrive during/after a failure", "specification": "A partial transcript.json from a crashed run is not validated on next open (ties ed-g1)." }
+      ]
+    },
+    {
+      "id": "pr-error-card",
+      "name": "Import/transcribe error surfaced on card",
+      "category": "failure",
+      "scope": "in",
+      "description": "Error status with message rendered on the card (useProjects.ts:154).",
+      "layers": ["frontend"],
+      "cause": "system"
+    },
+    {
+      "id": "pr-g1",
+      "name": "App quit mid-transcription",
+      "category": "boundary",
+      "scope": "in",
+      "description": "list_projects repairs stale Importing only (src-tauri/src/projects.rs:202); a project left Transcribing stays stuck with a spinner and no retry path.",
+      "layers": ["backend", "data-model"],
+      "cause": "system"
+    },
+    {
+      "id": "pr-g2",
+      "name": "list_projects failure renders as empty",
+      "category": "failure",
+      "scope": "in",
+      "description": "Caught to console.error, loading=false (useProjects.ts:44) → the 'No projects yet' empty state (ProjectsPage.tsx:379), identical to a genuinely empty library.",
+      "layers": ["frontend"],
+      "cause": "system"
+    },
+    {
+      "id": "pr-g3",
+      "name": "Corrupt project.json vanishes",
+      "category": "boundary",
+      "scope": "in",
+      "description": "read_project returns None on parse failure (projects.rs:56); list_projects silently continues (:199) and the project disappears.",
+      "layers": ["backend", "data-model"],
+      "cause": "system"
+    },
+    {
+      "id": "pr-g5",
+      "name": "Project-create kickoff failure",
+      "category": "failure",
+      "scope": "in",
+      "description": "createProject has no try/catch (useProjects.ts:51); a throw propagates through handleCreate with no catch (ProjectsPage.tsx:205), no feedback.",
+      "layers": ["frontend"],
+      "cause": "system"
+    },
+    {
+      "id": "pr-g4",
+      "name": "Silent delete failure",
+      "category": "failure",
+      "scope": "out-with-implication",
+      "description": "deleteProject re-throws but handleConfirmDelete's finally closes the modal with no error (useProjects.ts:97; ProjectsPage.tsx:328); project remains.",
+      "layers": ["frontend"],
+      "cause": "system",
+      "scope_note": "Delete must not report success it didn't achieve; keep the row and surface the error."
+    },
+    {
+      "id": "pr-g6",
+      "name": "Selected model deleted before transcribe",
+      "category": "failure",
+      "scope": "out-with-implication",
+      "description": "Auto-transcribe uses selectedModelId (App.tsx:62); if that model was deleted, transcription errors. Inherits cross-cutting dangling selection.",
+      "layers": ["frontend", "backend"],
+      "cause": "user-input",
+      "scope_note": "Re-validate the model exists before kicking off auto-transcription."
+    },
+    {
+      "id": "pr-g7",
+      "name": "Large library (no virtualization)",
+      "category": "rendering",
+      "scope": "out",
+      "description": "All cards rendered (ProjectsPage.tsx:391); fine at small N.",
+      "layers": ["frontend"],
+      "scope_note": "In-scope when libraries grow to hundreds of projects."
+    },
+
+    {
+      "id": "se-catalogue",
+      "name": "Model catalogue listed",
+      "category": "active",
+      "scope": "in",
+      "description": "Six model cards with disk-derived status.",
+      "layers": ["frontend"]
+    },
+    {
+      "id": "se-downloading",
+      "name": "Downloading with progress",
+      "category": "active",
+      "scope": "in",
+      "description": "Live bytes/speed/ETA; resumable and cancellable. Exemplary re-entry handling.",
+      "layers": ["frontend", "infrastructure"],
+      "reentry_variants": [
+        { "context": "Q1 — return after time has passed", "specification": "Quit mid-download leaves a .part; relaunch derives Partial + Resume from disk (models.rs:285)." },
+        { "context": "Q4 — underlying data changed", "specification": ".bin deleted externally → list_models re-derives NotDownloaded." },
+        { "context": "Q5 — arrive during/after a failure", "specification": "Connection loss keeps .part; Retry resumes via a Range request (models.rs:302)." }
+      ]
+    },
+    {
+      "id": "se-partial",
+      "name": "Partial download (resume available)",
+      "category": "boundary",
+      "scope": "in",
+      "description": ".part on disk after cancel/interrupt; Resume button + bytes-so-far.",
+      "layers": ["frontend", "data-model"]
+    },
+    {
+      "id": "se-ready",
+      "name": "Model ready",
+      "category": "active",
+      "scope": "in",
+      "description": ".bin present; size shown, Delete + Use-for-transcription controls.",
+      "layers": ["frontend", "data-model"]
+    },
+    {
+      "id": "se-selected",
+      "name": "Active model selected",
+      "category": "active",
+      "scope": "in",
+      "description": "selectedModelId persisted to settings.json; Active-model badge.",
+      "layers": ["frontend", "data-model"]
+    },
+    {
+      "id": "se-g1",
+      "name": "No model-file integrity check",
+      "category": "failure",
+      "scope": "in",
+      "description": "Only byte size is verified (models.rs:405); a corrupt-but-complete file is marked Ready and fails later at load (transcription.rs:297).",
+      "layers": ["backend"],
+      "cause": "external"
+    },
+    {
+      "id": "se-g2",
+      "name": "Dangling active-model selection after delete",
+      "category": "failure",
+      "scope": "in",
+      "description": "Deleting the active model doesn't clear selectedModelId (useModels.ts:95; auto-select only when empty, App.tsx:37); next transcribe fails.",
+      "layers": ["frontend", "backend", "data-model"],
+      "cause": "user-input"
+    },
+    {
+      "id": "se-g4",
+      "name": "Finalize with no Content-Length",
+      "category": "failure",
+      "scope": "in",
+      "description": "Size check skipped when content_length==0 (models.rs:400) and .part renamed regardless (:413); a truncated file can finalize as Ready.",
+      "layers": ["backend"],
+      "cause": "external"
+    },
+    {
+      "id": "se-g3",
+      "name": "Silent model-delete failure",
+      "category": "failure",
+      "scope": "out-with-implication",
+      "description": "deleteModel logs to console.error only (useModels.ts:99).",
+      "layers": ["frontend"],
+      "cause": "system",
+      "scope_note": "Delete UI must not imply a success that didn't happen."
+    },
+    {
+      "id": "se-g5",
+      "name": "Download progress not announced",
+      "category": "rendering",
+      "scope": "out-with-implication",
+      "description": "ProgressBar hideLabel (SettingsPage.tsx:143); no live-region for assistive tech.",
+      "layers": ["frontend"],
+      "scope_note": "The card structure already supports a live-region hook."
+    }
+  ],
+  "transitions": [],
+  "metadata": {
+    "project_name": "Wave",
+    "version": "0.1",
+    "last_updated": "2026-07-12"
+  }
+}
