@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 use crate::projects::{project_dir, read_project, write_project, ProjectStatus};
 
@@ -21,6 +21,8 @@ pub struct Transcript {
     pub words:       Vec<Word>,
     pub language:    String,
     pub duration_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
 }
 
 // ─── Read transcript ──────────────────────────────────────────────────────────
@@ -88,18 +90,12 @@ pub async fn transcribe(
         return Err("Project not found".into());
     }
 
-    // Resolve model path
-    let model_filename = format!("ggml-{}.bin", model_id);
-    let model_path = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("models")
-        .join(&model_filename);
-
-    if !model_path.exists() {
-        return Err(format!("Model file not found: {}", model_filename));
+    if model_id != "large-v3-turbo" && model_id != crate::models::PARAKEET_ID {
+        return Err("Choose a transcription model in Settings.".into());
     }
+    let model_path = crate::models::installed_model_path(&app, &model_id)
+        .ok_or("Download the selected transcription model in Settings first.")?;
+    if model_id == crate::models::PARAKEET_ID { crate::parakeet::runtime_path()?; }
 
     // Mark project as transcribing
     if let Some(mut project) = read_project(&dir) {
@@ -174,19 +170,33 @@ async fn run_transcription(
     let pid_cb   = project_id.clone();
     let app_al   = app.clone();
     let pid_al   = project_id.clone();
+    let saved_model_id = model_id.clone();
     let (words, language) = tokio::task::spawn_blocking(move || {
-        let (mut words, language) = run_whisper(&model_path, &model_id, &audio, move |progress: i32| {
+        let report = move |progress: i32| {
             // Map whisper's 0–100 → our 10–90 range
             let _ = app_cb.emit("transcription:progress", serde_json::json!({
                 "projectId": pid_cb,
                 "percentage": 10 + (progress * 80 / 100),
             }));
-        })?;
+        };
+        let is_parakeet = model_id == crate::parakeet::MODEL_ID;
+        let (mut words, language) = if is_parakeet {
+            crate::parakeet::transcribe(&model_path, &audio, report)?
+        } else {
+            run_whisper(&model_path, &model_id, &audio, report)?
+        };
         let _ = app_al.emit("transcription:progress", serde_json::json!({
             "projectId": pid_al,
             "percentage": 91,
         }));
-        finalize_timings(&audio, &mut words, aligner.as_deref(), &language);
+        if is_parakeet {
+            // Native TDT word spans already have real ends; never replace them
+            // with Whisper's DTW assumptions or require the English aligner.
+            refine_with_vad(&audio, &mut words, ALIGNED_SNAP);
+            enforce_monotonic(&mut words);
+        } else {
+            finalize_timings(&audio, &mut words, aligner.as_deref(), &language);
+        }
         Ok::<_, String>((words, language))
     })
     .await
@@ -196,7 +206,7 @@ async fn run_transcription(
     emit_progress(&app, &project_id, 95).await;
 
     // ── 3. Save transcript.json ───────────────────────────────────────────────
-    let transcript = Transcript { words, language, duration_ms };
+    let transcript = Transcript { words, language, duration_ms, model_id: Some(saved_model_id) };
     let json = serde_json::to_string_pretty(&transcript).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("transcript.json"), json).map_err(|e| e.to_string())?;
 
@@ -580,7 +590,7 @@ fn run_whisper_with(
 ///   own long-form seeking can instead carry a loop on, or decode the same audio
 ///   twice after a window's timestamps go wrong. It also lets the prompt, which
 ///   Whisper only reads at the start, reach every piece.
-fn speech_chunks(audio: &[f32]) -> Vec<std::ops::Range<usize>> {
+pub(crate) fn speech_chunks(audio: &[f32]) -> Vec<std::ops::Range<usize>> {
     const FRAME:    usize = 160;         // 10 ms at 16 kHz
     const LONGEST:  usize = 30 * 16_000;
     const SHORTEST: usize = 15 * 16_000;
@@ -812,7 +822,7 @@ mod tests {
         decoding.chunked = std::env::var("WHOLE").is_err();
         let (mut words, language) = run_whisper_with(Path::new(&model), "large-v3-turbo", &audio, |p| eprint!("\r{p}%"), &decoding).unwrap();
         let aligned = finalize_timings(&audio, &mut words, aligner.as_deref().map(Path::new), &language);
-        let transcript = Transcript { words, language, duration_ms: (audio.len() * 1000 / 16_000) as i64 };
+        let transcript = Transcript { words, language, duration_ms: (audio.len() * 1000 / 16_000) as i64, model_id: Some("large-v3-turbo".into()) };
         std::fs::write(&out, serde_json::to_string(&transcript).unwrap()).unwrap();
         println!("\n{} words ({aligned} aligned, {}) in {:.0} s", transcript.words.len(), transcript.language, t0.elapsed().as_secs_f64());
     }

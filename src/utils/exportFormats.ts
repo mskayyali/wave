@@ -25,6 +25,7 @@ function groupIntoParagraphs(words: ExportWord[]): ExportWord[][] {
 
 /** Milliseconds → SRT timestamp: 00:01:23,456 */
 function toSRTTime(ms: number): string {
+  ms = Math.max(0, Math.round(ms));
   const h  = Math.floor(ms / 3_600_000);
   const m  = Math.floor((ms % 3_600_000) / 60_000);
   const s  = Math.floor((ms % 60_000) / 1_000);

@@ -23,22 +23,18 @@ const IDENTIFIER: &str = "com.mskayyali.wave";
 /// The protocol revisions this server has been checked against, newest first.
 const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS: &str = "\
-Wave is a text-based audio editor for podcasts: the audio is edited by editing its transcript.
+const INSTRUCTIONS: &str = r#"Wave edits podcast audio by editing its transcript.
 
-Workflow: list_projects, then get_transcript for the text with word numbers. Use find_text or get_words \
-to get the exact word numbers of a passage, then edit with cut_words, cut_time, correct_words, \
-tighten_pauses or rename_speaker.
+Workflow: list_projects, get_transcript, then find_text/get_words for exact word numbers. Before cutting, use plan_edit with word_ranges (preferred for speech) or time_ranges (for precise non-word trims). It is a dry run: it returns the actual resolved source boundaries, fades, edited timing, manual overrides and review flags without changing the project. Apply with cut_words/cut_time and expected_revision from that report. If the revision is stale, re-read and re-plan; never silently retry against changed content. After each editing batch, use get_transitions, especially review_only=true, and report joins needing human listening.
 
-- Word numbers are positions in the original transcript. They never change as you edit.
-- Times are in seconds.
-- Every edit is non-destructive and appears live in Wave's editor, as one undoable edit labelled with \
-your `label`. The user can undo it there, or you can with `undo`.
-- Working on a project opens it in Wave's editor.
-- You can't hear the audio. Judge from the words, their timing, confidence and pauses, and keep cuts at \
-word boundaries so the speech still flows.
-- Fillers (um, uh, hmm) are words in English transcripts: find_text finds them and cut_words cuts them. \
-Transcription writes most of them, not every one.";
+- Word numbers never change after edits. Tool time arguments and transcript/word times refer to ORIGINAL audio seconds, never the shortened output timeline. get_transitions labels original and edited times separately; fade lengths are milliseconds.
+- Prefer cut_words for fillers, repetitions and false starts. Wave chooses protected boundaries and bounded fades through the same plan used by playback, export and subtitles. Do not add your own padding, snap to zero crossings or lengthen fades to conceal a bad join.
+- cut_time is exact and bypasses word-boundary placement. It rejects ranges overlapping kept speech unless allow_word_trim=true is explicitly supplied for an intentional speech trim. It cannot determine from timestamps whether a breath, cough or consonant is safe to remove.
+- Wait for audio analysis to be ready before making audio edits; do not force cuts while the boundaries are still being prepared.
+- Keep natural breaths, sentence spacing and speaker changes. Prefer tighten_pauses with natural/relaxed rhythm over indiscriminate silence removal. Pause tools infer gaps from timestamps, not proof of silence.
+- Preserve manual boundary adjustments. Cuts, corrections and added pauses are non-destructive and appear live as labelled undoable groups. Prefer undo with an edit_id to reverse a group. restore_words restores the actual audio inside the selected word spans, including manual time cuts, as one undoable step. Working on a project opens it in Wave.
+- You cannot hear the audio. Transcription confidence is not alignment confidence; timestamps and absence of review flags do not certify an inaudible join. Tell the user what still needs listening, using Wave's C preview. Never claim a listening check you did not perform.
+- Fillers (um, uh, hmm) are words in English transcripts; find_text and cut_words handle them. Transcription catches most, not every one."#;
 
 pub fn run() {
     let mut client: Option<String> = None;
@@ -163,6 +159,7 @@ fn word_ranges() -> Value {
     json!({
         "type": "array",
         "description": "Ranges of word numbers, both ends included.",
+        "minItems": 1,
         "items": {
             "type": "object",
             "properties": {
@@ -174,6 +171,29 @@ fn word_ranges() -> Value {
     })
 }
 
+fn time_ranges() -> Value {
+    json!({
+        "type": "array", "minItems": 1,
+        "description": "Exact ranges in ORIGINAL audio seconds. Minimum duration 0.005 s.",
+        "items": {
+            "type": "object",
+            "properties": {
+                "start": { "type": "number", "minimum": 0 },
+                "end": { "type": "number", "minimum": 0 }
+            },
+            "required": ["start", "end"]
+        }
+    })
+}
+
+fn revision() -> Value {
+    json!({ "type": "string", "description": "Revision from plan_edit. Rejects the edit if the editor changed; re-plan instead of dropping this check." })
+}
+
+fn transition_paging() -> Value {
+    json!({ "type": "integer", "minimum": 0, "description": "Row offset in matching transitions (default 0). Join numbers are scoped to the reported revision." })
+}
+
 fn tools() -> Vec<Value> {
     vec![
         tool("list_projects", "List projects", true,
@@ -182,7 +202,7 @@ fn tools() -> Vec<Value> {
         tool("get_project", "Project details", true,
             "A project's status and editing state: length before and after edits, edits, speakers, \
              long and added pauses, speech enhancement (what's applied, whether it's on, which models are \
-             downloaded) and running jobs.",
+             downloaded), edit revision, transition review status and running jobs.",
             json!({ "project": project() }), &["project"]),
         tool("get_transcript", "Read the transcript", true,
             "The transcript as it stands, one paragraph per line, each starting with the number of its first word \
@@ -212,30 +232,43 @@ fn tools() -> Vec<Value> {
                 "project": project(),
                 "min_seconds": { "type": "number", "minimum": 0.1, "description": "Default 1.0." }
             }), &["project"]),
+        tool("get_transitions", "Inspect edit transitions", true,
+            "Inspect the resolved joins used by playback and export: ORIGINAL source edges, EDITED output times, \
+             actual fade lengths, neighbouring word numbers, manual overrides and listening-review reasons. \
+             Review flags are heuristics, not acoustic certification. Page through long edits with from_transition.",
+            json!({
+                "project": project(), "from_transition": transition_paging(),
+                "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Default 50." },
+                "review_only": { "type": "boolean", "default": false }
+            }), &["project"]),
+        tool("plan_edit", "Plan an edit without applying it", true,
+            "Dry-run prospective cuts through Wave's actual boundary and fade planner. Supply exactly one of \
+             word_ranges or time_ranges. Changes no audio, edits, selection or playback. Returns resolved joins \
+             and the current revision; apply with cut_words/cut_time and expected_revision. Inspect review reasons \
+             before committing; a successful dry run cannot certify how the audio sounds.",
+            json!({
+                "project": project(), "word_ranges": word_ranges(), "time_ranges": time_ranges(),
+                "allow_word_trim": { "type": "boolean", "default": false, "description": "Permit an intentional exact time trim overlapping kept speech; prefer word_ranges for whole words." },
+                "from_transition": transition_paging(),
+                "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Default 50." },
+                "review_only": { "type": "boolean", "default": false }
+            }), &["project"]),
         tool("cut_words", "Cut words", false,
-            "Cut words, and their audio, from the edit. Cuts are padded into the surrounding pauses and eased to \
-             quiet points, so whole words come out cleanly.",
-            json!({ "project": project(), "ranges": word_ranges(), "label": label() }), &["project", "ranges"]),
+            "Cut speech by stable word numbers. Uses protected neighbouring gaps and bounded fades in the shared \
+             playback/export plan, preserving manual overrides. Use plan_edit first and inspect get_transitions \
+             afterwards; tight joins may need listening. No guarantee of an inaudible splice.",
+            json!({ "project": project(), "ranges": word_ranges(), "label": label(), "expected_revision": revision() }), &["project", "ranges"]),
         tool("restore_words", "Restore words", false,
-            "Bring cut words back.",
+            "Bring words and their audio back, including partial manual trims and time cuts. Restoration is one undoable transaction; use undo to reverse it.",
             json!({ "project": project(), "ranges": word_ranges() }), &["project", "ranges"]),
         tool("cut_time", "Cut a stretch of audio", false,
-            "Cut exact stretches of audio by time, for things that aren't words: a breath, a cough, a noise, \
-             music. Words they overlap are trimmed, not removed whole.",
+            "Cut exact stretches in ORIGINAL audio seconds (at least 0.005 s), typically non-word material. \
+             No boundary padding or snapping. Rejects overlap with kept words unless allow_word_trim=true \
+             explicitly requests an intentional speech trim. Timestamps alone cannot identify a safe breath/noise cut. \
+             Prefer cut_words for speech, plan_edit first, then inspect get_transitions.",
             json!({
-                "project": project(),
-                "ranges": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "start": { "type": "number", "minimum": 0, "description": "Seconds." },
-                            "end":   { "type": "number", "minimum": 0, "description": "Seconds." }
-                        },
-                        "required": ["start", "end"]
-                    }
-                },
-                "label": label()
+                "project": project(), "ranges": time_ranges(), "label": label(), "expected_revision": revision(),
+                "allow_word_trim": { "type": "boolean", "default": false, "description": "Bypass word protection for an intentional exact speech trim. Does not prove that the trim is acoustically safe." }
             }), &["project", "ranges"]),
         tool("correct_words", "Correct words", false,
             "Fix words transcription got wrong (names, terms, mishearings). Changes the text only, not the audio; \
@@ -321,7 +354,7 @@ fn tools() -> Vec<Value> {
             "The edits made so far, newest first, with who made them.",
             json!({ "project": project() }), &["project"]),
         tool("undo", "Undo an edit", false,
-            "Undo an edit: the one with edit_id (from list_edits), or else the last edit an AI agent made.",
+            "Undo an edit: the one with edit_id (from list_edits), or else the last editor transaction, including restore and boundary adjustments.",
             json!({ "project": project(), "edit_id": { "type": "string" } }), &["project"]),
         tool("analyze", "Detect speakers", false,
             "Start speaker detection on the project (about a minute per hour of audio). Returns at once; check \
@@ -400,6 +433,21 @@ mod tests {
                 assert!(t["inputSchema"]["properties"].get(r.as_str().unwrap()).is_some(), "{name}: {r} isn't a property");
             }
         }
+    }
+
+    #[test]
+    fn editing_tools_expose_resolved_plans_and_revision_checks() {
+        let listed = tools();
+        let get = |name: &str| listed.iter().find(|t| t["name"] == name).unwrap();
+        assert_eq!(get("plan_edit")["annotations"]["readOnlyHint"], true);
+        assert_eq!(get("get_transitions")["annotations"]["readOnlyHint"], true);
+        assert_eq!(get("cut_time")["inputSchema"]["properties"]["allow_word_trim"]["default"], false);
+        for name in ["cut_words", "cut_time"] {
+            assert!(get(name)["inputSchema"]["properties"].get("expected_revision").is_some());
+        }
+        assert!(INSTRUCTIONS.contains("ORIGINAL audio seconds"));
+        assert!(INSTRUCTIONS.contains("Transcription confidence is not alignment confidence"));
+        assert!(INSTRUCTIONS.contains("Never claim a listening check"));
     }
 
     #[test]

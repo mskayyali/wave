@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { PAUSE_LENGTHS, pauseLengthLabel } from '../../lib/pauseOptions';
 import { Menu, MenuItem, MenuItemDivider } from '@carbon/react';
 
 // Right-click menu shared by the transcript and the waveform. Like any context
@@ -27,12 +28,14 @@ export interface WordContextMenuState {
   title:       string;
   /** Every word in it is already cut. */
   allDeleted:  boolean;
+  hasCutAudio?: boolean;
   /** The one speaker who says these words, when speakers are detected. */
   speaker?:    { id: number; name: string };
   /** Opened on a single word (not a pause): it can be corrected. */
   word?:       { correctedFrom?: string };
   /** Opened on an added pause (its edit's id). */
   pauseId?:    string;
+  pauseMs?: number;
 }
 
 export interface WordContextMenuActions {
@@ -58,10 +61,9 @@ export interface WordContextMenuActions {
   onAddPause:         (ms: number) => void;
   /** Take an added pause back out. */
   onRemovePause:      () => void;
+  onResizePause: (ms: number) => void;
 }
 
-/** What "Add pause after" offers. */
-const PAUSE_LENGTHS = [250, 500, 1000, 2000];
 
 /** "4:31.220" */
 function fmtClock(ms: number): string {
@@ -127,6 +129,8 @@ export function WordContextMenu({ menu, hasHighlight, ...a }: {
   );
 
   const items = kind === 'pause' ? [
+    ...PAUSE_LENGTHS.map(ms => <MenuItem key={`length-${ms}`} label={`${pauseLengthLabel(ms)}${menu?.pauseMs === ms ? ' ✓' : ''}`} onClick={() => a.onResizePause(ms)} />),
+    <MenuItemDivider key="length-divider" />,
     <MenuItem key="from"   label="Play from here" onClick={a.onPlayFrom} />,
     <MenuItemDivider key="d1" />,
     <MenuItem key="remove" label="Take out this pause" kind="danger" onClick={a.onRemovePause} />,
@@ -162,6 +166,7 @@ export function WordContextMenu({ menu, hasHighlight, ...a }: {
     menu?.word && <MenuItem key="correct" label="Correct word…" shortcut="↩" onClick={a.onCorrect} />,
     menu?.word?.correctedFrom !== undefined
       && <MenuItem key="uncorrect" label={`Back to "${menu.word.correctedFrom}"`} onClick={a.onRevertCorrection} />,
+    !menu?.allDeleted && menu?.hasCutAudio && <MenuItem key="restore-partial" label="Restore audio" onClick={a.onRestore} />,
     !menu?.allDeleted && <MenuItemDivider key="dp" />,
     addPause,
     <MenuItemDivider key="d2" />,

@@ -10,12 +10,14 @@ import { toPlainText, toSRT, toVTT, toJSON } from '../../utils/exportFormats';
 import { activity } from '../../lib/activity';
 import { AUDIO_FORMATS, estimateMb, type AudioFormatId } from '../../lib/audioFormats';
 import { formatLength } from '../../lib/time';
+import { getCatalogEntry, PARAKEET_MODEL_ID } from '../../lib/modelCatalog';
 import type { Transcript, EnrichedWord } from '../../hooks/useTranscript';
 import type { EditAction } from '../../pages/EditorPage';
 import type { EnhanceToolProps } from './EnhancePanel';
 import type { SpeakerToolProps } from './SpeakersPanel';
 import type { PauseToolProps } from './PausesPanel';
 import { ToolsTab, type ToolId } from './ToolsTab';
+import type { EditPlan } from '../../lib/editPlan';
 import type { InsertedPause } from '../../lib/editPlayer';
 
 type TimeOp = { startMs: number; endMs: number };
@@ -129,16 +131,12 @@ function usePanelWidth() {
 
 // ─── Export tab ───────────────────────────────────────────────────────────────
 
-/** An added pause as export_audio takes it. */
-export function insertOp(p: InsertedPause) {
-  return { atMs: p.atMs, ms: p.ms, toneStartMs: p.tone?.startMs ?? null, toneEndMs: p.tone?.endMs ?? null };
-}
-
 interface ExportTabProps {
   transcript:    Transcript;
   projectName:   string;
   projectId:     string;
   filteredWords: (EnrichedWord & { speaker?: string })[];  // non-deleted, non-silence words for export
+  editPlan:      EditPlan;
   currentOps:    TimeOp[];          // merged cut ranges (for audio splice)
   /** Pauses added by hand (room tone, spliced in). */
   addedPauses:   InsertedPause[];
@@ -182,7 +180,7 @@ function aboutMb(mb: number): string {
   return `about ${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
 }
 
-function ExportTab({ transcript, projectName, projectId, filteredWords, currentOps, addedPauses, enhanced }: ExportTabProps) {
+function ExportTab({ transcript, projectName, projectId, filteredWords, currentOps, addedPauses, enhanced, editPlan }: ExportTabProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [audioError, setAudioError] = useState<string | null>(null);
   const { format, preset, pickFormat, pickPreset } = useAudioChoice();
@@ -216,8 +214,7 @@ function ExportTab({ transcript, projectName, projectId, filteredWords, currentO
         { id: `export:${projectId}`, label: 'Exporting audio', doneLabel: `${format.name} exported`, projectId, quietMs: 500 },
         () => invoke('export_audio', {
           projectId,
-          ops: currentOps.map((op) => ({ startMs: op.startMs, endMs: op.endMs })),
-          inserts: addedPauses.map(insertOp),
+          plan: editPlan,
           destPath: path,
           enhanced,
           format: preset.settings,
@@ -235,9 +232,7 @@ function ExportTab({ transcript, projectName, projectId, filteredWords, currentO
   // exported text / subtitles reflect the edits the user has made.
   // Times are on the edited timeline (EditorPage maps them), and so is the length.
   const { language } = transcript;
-  const durationMs = Math.max(0, transcript.durationMs
-    - currentOps.reduce((sum, op) => sum + op.endMs - op.startMs, 0)
-    + addedPauses.reduce((sum, p) => sum + p.ms, 0));
+  const durationMs = editPlan.durationMs;
 
   const transcriptExports = [
     { label: 'Plain text',    ext: 'txt',  desc: 'Paragraphs of text',    generate: () => toPlainText(filteredWords) },
@@ -376,6 +371,7 @@ function DetailsTab({ transcript, alignerReady, onRealign }: DetailsTabProps) {
   const [aligning,  setAligning]  = useState(false);
   const [alignNote, setAlignNote] = useState<{ ok: boolean; text: string } | null>(null);
   const isEnglish = transcript.language === 'en';
+  const isParakeet = transcript.modelId === PARAKEET_MODEL_ID;
 
   async function handleRealign() {
     setAligning(true);
@@ -391,10 +387,11 @@ function DetailsTab({ transcript, alignerReady, onRealign }: DetailsTabProps) {
   }
 
   const rows: { label: string; value: string }[] = [
-    { label: 'Language',   value: languageName(transcript.language) },
+    { label: 'Model',      value: getCatalogEntry(transcript.modelId ?? 'large-v3-turbo')?.name ?? 'Whisper' },
+    { label: 'Language',   value: transcript.language === 'und' ? 'Not reported by model' : languageName(transcript.language) },
     { label: 'Duration',   value: formatLength(transcript.durationMs) },
     { label: 'Words',      value: transcript.words.length.toLocaleString() },
-    { label: 'Confidence', value: `${Math.round(avgConfidence(transcript.words) * 100)}%` },
+    { label: 'Confidence', value: isParakeet ? 'Not provided by model' : `${Math.round(avgConfidence(transcript.words) * 100)}%` },
   ];
 
   return (
@@ -413,9 +410,11 @@ function DetailsTab({ transcript, alignerReady, onRealign }: DetailsTabProps) {
       <ContainedList label="Word timing" kind="on-page" size="md">
         <ContainedListItem>
           <ItemText
-            title={!isEnglish ? 'English only' : alignerReady ? 'Word alignment' : 'Alignment model missing'}
+            title={isParakeet ? 'Built-in word timing' : !isEnglish ? 'English only' : alignerReady ? 'Word alignment' : 'Alignment model missing'}
             helper={
-              !isEnglish
+              isParakeet
+                ? 'Parakeet places words on the audio directly. No separate alignment download is required.'
+                : !isEnglish
                 ? 'Word alignment currently supports English recordings.'
                 : alignerReady
                   ? 'Re-run if cuts leave part of a word behind, or for projects transcribed before alignment was installed.'
@@ -452,6 +451,7 @@ interface InspectorPanelProps {
   projectId:     string;
   /** Non-deleted words for the text exports, with speaker names when shown. */
   filteredWords: (EnrichedWord & { speaker?: string })[];
+  editPlan:      EditPlan;
   currentOps:    TimeOp[];
   editActions:   EditAction[];
   onUndoAction:  (id: string) => void;
@@ -484,7 +484,7 @@ function readTab(): number {
   }
 }
 
-export function InspectorPanel({ transcript, alignerReady, onRealign, projectName, projectId, filteredWords, currentOps, editActions, onUndoAction, enhanceTool, speakerTool, pauseTool, addedPauses }: InspectorPanelProps) {
+export function InspectorPanel({ transcript, alignerReady, onRealign, projectName, projectId, filteredWords, currentOps, editActions, onUndoAction, enhanceTool, speakerTool, pauseTool, addedPauses, editPlan }: InspectorPanelProps) {
   const [tab, setTab] = useState(readTab);
   /** The tool open in the Tools tab (kept while other tabs are shown). */
   const [openTool, setOpenTool] = useState<ToolId | null>(null);
@@ -515,6 +515,7 @@ export function InspectorPanel({ transcript, alignerReady, onRealign, projectNam
             projectName={projectName}
             projectId={projectId}
             filteredWords={filteredWords}
+            editPlan={editPlan}
             currentOps={currentOps}
             addedPauses={addedPauses}
             enhanced={enhanceTool.enhancement?.enabled ?? false}

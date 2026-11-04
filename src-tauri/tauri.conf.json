@@ -47,6 +47,7 @@
       "icons/icon.ico"
     ],
     "resources": {
+      "vendor/nemo-speech/runtime/": "nemo-speech/",
       "vendor/lame/README.md": "licenses/LAME.md",
       "vendor/lame/COPYING": "licenses/LAME-COPYING.txt"
     },

@@ -22,6 +22,7 @@ struct ModelSpec {
 /// The forced-alignment model (wav2vec2-base-960h, int8 ONNX, Apache-2.0). It
 /// places every word on the audio it was spoken in; see alignment.rs.
 pub const ALIGNER_ID: &str = "wav2vec2-align-en";
+pub const PARAKEET_ID: &str = "parakeet-tdt-0.6b-v3";
 const ALIGNER_FILENAME: &str = "wav2vec2-base-960h-int8.onnx";
 
 
@@ -35,15 +36,16 @@ pub const DPDFNET_ID: &str = "dpdfnet";
 pub const DIARIZATION_ID: &str = "nemotron3-diarization";
 const DIARIZATION_GRAPH: &str = "nemotron3-diarization-353b6f8/model_quantized.onnx";
 
-/// Wave ships one model: Large v3 Turbo. Text-based editing needs both accurate
-/// words and accurate word timings, and Turbo is the best fit on Apple Silicon:
-/// near-Large-v3 accuracy at a fraction of the time, with a DTW alignment preset
-/// (see `dtw_preset_for` in transcription.rs). Smaller models trade away word
-/// accuracy; Large v3 is ~2× the size and much slower for no timing benefit.
-/// If a model is added back, give it a DTW preset too and a MODEL_CATALOG entry
-/// in src/lib/modelCatalog.ts. The other entries are the word-alignment,
-/// clean-up and speaker-detection models.
+/// Local transcription engines and their supporting tools. Whisper has a DTW
+/// preset and an English aligner; Parakeet supplies native TDT word spans.
+/// Keep in sync with MODEL_CATALOG in src/lib/modelCatalog.ts.
 const KNOWN_MODELS: &[ModelSpec] = &[
+    ModelSpec {
+        id: PARAKEET_ID,
+        filename: "parakeet-tdt-0.6b-v3.q8_0.gguf",
+        url: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/541d1f99c6b0c3cd0b11a95167540bb8edefd82b/parakeet-tdt-0.6b-v3.q8_0.gguf",
+        companions: &[],
+    },
     ModelSpec {
         id:       "large-v3-turbo",
         filename: "ggml-large-v3-turbo.bin",
@@ -403,7 +405,6 @@ async fn do_download(
     } else {
         0
     };
-    let resuming = resume_from > 0;
 
     // ── Build request ─────────────────────────────────────────────────────────
     let client = reqwest::Client::builder()
@@ -429,6 +430,16 @@ async fn do_download(
         });
     }
 
+    // A server may ignore Range and send the complete file. Restart instead
+    // of appending that full response to the partial model.
+    let resume_from = if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+        let range = response.headers().get(reqwest::header::CONTENT_RANGE).and_then(|v| v.to_str().ok()).unwrap_or("");
+        if !range.starts_with(&format!("bytes {resume_from}-")) {
+            return Err("Server returned an invalid resume range. Try again.".into());
+        }
+        resume_from
+    } else { 0 };
+    let resuming = resume_from > 0;
     let content_length = response.content_length().unwrap_or(0);
     let total_bytes = content_length + resume_from;
 
@@ -437,6 +448,7 @@ async fn do_download(
         .create(true)
         .append(resuming)
         .write(!resuming)
+        .truncate(!resuming)
         .open(&part_path)
         .await
         .map_err(|e| format!("Cannot open file for writing: {}", e))?;
@@ -523,9 +535,38 @@ async fn do_download(
         }
     }
 
+    if model_id == PARAKEET_ID {
+        let check = part_path.clone();
+        let verified = tokio::task::spawn_blocking(move || verify_parakeet(&check)).await.map_err(|e| e.to_string())?;
+        if let Err(error) = verified {
+            let _ = tokio::fs::remove_file(&part_path).await;
+            return Err(error);
+        }
+    }
+    if cancel_flag.load(Ordering::Relaxed) { return Err("cancelled".into()); }
     tokio::fs::rename(&part_path, &final_path)
         .await
         .map_err(|e| format!("Could not finalize file: {}", e))?;
 
+    Ok(())
+}
+
+fn verify_parakeet(path: &std::path::Path) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    if file.metadata().map_err(|e| e.to_string())?.len() != 713_975_456 {
+        return Err("Parakeet download is incomplete. Download it again.".into());
+    }
+    let mut hash = Sha256::new();
+    let mut buffer = vec![0u8; 1024 * 1024];
+    loop {
+        let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        if n == 0 { break; }
+        hash.update(&buffer[..n]);
+    }
+    if format!("{:x}", hash.finalize()) != "e3880d0aaaaf2c308ea2c35016b2b895c423eb3fda924c1b463d1c19b7f4d32e" {
+        return Err("Parakeet download did not pass verification. Download it again.".into());
+    }
     Ok(())
 }

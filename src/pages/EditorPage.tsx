@@ -6,14 +6,14 @@ import { EditorTopBar } from '../components/editor/EditorTopBar';
 import { TranscriptEditor, type TextToken, type TranscriptContextEvent } from '../components/editor/TranscriptEditor';
 import { missing, type EnhanceToolProps } from '../components/editor/EnhancePanel';
 import { availableModels, canRun, useEnhancement, type EnhanceModelsReady, type EnhanceOptions } from '../hooks/useEnhancement';
-import { editedTime, findPauses, findRoomTone, RHYTHMS, shortenPauses, type Rhythm } from '../lib/pauses';
+import { findPauses, findRoomTone, RHYTHMS, shortenPauses, type Rhythm } from '../lib/pauses';
 import type { PauseToolProps } from '../components/editor/PausesPanel';
 import type { InsertedPause } from '../lib/editPlayer';
 import type { SpeakerToolProps } from '../components/editor/SpeakersPanel';
 import { useSpeakers } from '../hooks/useSpeakers';
 import { assignSpeakers, rootSpeaker, speakerTurns, type SpeakerLabels } from '../lib/speakers';
 import { SegmentsView } from '../components/editor/SegmentsView';
-import { InspectorPanel, insertOp } from '../components/editor/InspectorPanel';
+import { InspectorPanel } from '../components/editor/InspectorPanel';
 import { ShortcutsModal } from '../components/editor/ShortcutsModal';
 import { WaveformTimeline } from '../components/editor/WaveformTimeline';
 import { WordContextMenu, type WordContextMenuActions, type WordContextMenuState } from '../components/editor/WordContextMenu';
@@ -24,7 +24,17 @@ import { onCommand, typing } from '../lib/commands';
 import { findPhrase } from '../lib/textSearch';
 import { useTranscript } from '../hooks/useTranscript';
 import { useWaveform } from '../hooks/useWaveform';
-import { quietestPoint } from '../lib/audioAnalysis';
+import type { WordAudioState } from '../hooks/useWordAudioMarks';
+import { useEditHistory } from '../hooks/useEditHistory';
+import { PAUSE_LENGTHS, resolvePauseMarkers } from '../lib/pauseOptions';
+import { loadEdits, saveEdits } from '../lib/editPersistence';
+import { selectionWordIndices, wordCutIntent } from '../lib/selection';
+import { subtractRanges } from '../lib/ranges';
+import { wordAudioState } from '../lib/wordAudioState';
+import { useEditorSession } from '../hooks/useEditorSession';
+import { computeCutOps, type TimeOp } from '../lib/cutBoundaries';
+import { buildEditPlan, mapEditedWords, type EditPlan } from '../lib/editPlan';
+import { inspectTransitions } from '../lib/agentTransitions';
 import { loadWaveform, type WaveformPeaks } from '../lib/waveformData';
 import { activity } from '../lib/activity';
 import { registerEditor, type AgentWord, type EditorAgentApi } from '../lib/agent';
@@ -37,6 +47,8 @@ import type { EnrichedWord } from '../hooks/useTranscript';
 export type ViewMode = 'flow' | 'segments';
 
 export interface SelectionRange {
+  kind?: 'words' | 'audio';
+  wordIndices?: number[];
   startMs: number;
   endMs:   number;
 }
@@ -46,7 +58,7 @@ export interface EditAction {
   wordIndices: number[];  // indices into enrichedWords[] (empty for free-range cuts)
   /** Raw time range to cut, for selections not tied to any transcript word
    *  (breaths, pauses, room tone, music…). Present only on free-range cuts. */
-  range?:      { startMs: number; endMs: number };
+  range?:      { startMs: number; endMs: number; fadeMs?: number; review?: boolean; manualBoundary?: boolean };
   /** A manual nudge of one cut edge on the waveform: `key` names the edge
    *  (see currentOps), `ms` is where it now sits. Undoable like any edit. */
   adjust?:     { key: string; ms: number };
@@ -161,11 +173,6 @@ function wordsLabel(words: EnrichedWord[], indices: number[]): string {
   return `${indices.length} words (${fmtMs(first.startMs)}–${fmtMs(last.endMs)})`;
 }
 
-/** Edit-list label for removing several fillers (an earlier version's edits). */
-function fillersLabel(count: number): string {
-  return count === 1 ? '1 filler' : `${count} fillers`;
-}
-
 /** A passage marked in the timeline for reference (right-click in the transcript). */
 interface ReferenceRange {
   startMs:     number;
@@ -173,147 +180,21 @@ interface ReferenceRange {
   wordIndices: number[];
 }
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-// Note: time-domain conversion helpers (toPreviewMs / toOriginalMs) live here
-// when export is implemented.  The waveform always plays the original audio so
-// no conversion is needed during playback — all timestamps are in original time.
-
-/** A cut range in original time. `startKey`/`endKey` name the edges so a
- *  drag on the waveform can be recorded as an adjustment of that edge. */
-type TimeOp = { startMs: number; endMs: number; startKey?: string; endKey?: string };
-
-// ─── Cut ops ──────────────────────────────────────────────────────────────────
-// Merged cut ops (original-time ranges), from the deleted words, free-range cuts
-// and edge nudges. Pure, so a hypothetical edit can be previewed (C) exactly.
-// Silence entries are cut exactly at their boundaries — they represent real
-// silence, no Whisper imprecision to absorb.  Real words get up to ±60 ms of
-// padding into the neighbouring gap to absorb timestamp imprecision.
-//
-// Where a kept word runs straight into the cut (no pause to pad into), the
-// edge moves to the quietest moment just before the boundary — aligned word
-// starts lag the real onset slightly, so that's where the true gap between
-// the words is. Manual nudges from the waveform override both.
-const TRIM_PAD_MS = 60;
-const GENTLE_BEFORE_MS = 70;
-const GENTLE_AFTER_MS  = 10;
-
-function computeCutOps(
-  enrichedWords: EnrichedWord[],
-  deletedWords:  ReadonlySet<number>,
-  rangeOps:      { startMs: number; endMs: number; id: string }[],
-  adjustments:   ReadonlyMap<string, number>,
-  energy:        Float32Array | null,
-  fillerCuts:    { startMs: number; endMs: number }[] = [],
-): TimeOp[] {
-  const rawOps: TimeOp[] = [];
-
-  // ── Removed fillers (an earlier version's edits): cut exactly at the saved
-  // span; edges can be nudged like any cut.
-  for (const f of fillerCuts) {
-    const key = String(Math.round(f.startMs));
-    rawOps.push({
-      startMs:  adjustments.get(`fs:${key}`) ?? f.startMs,
-      endMs:    adjustments.get(`fe:${key}`) ?? f.endMs,
-      startKey: `fs:${key}`,
-      endKey:   `fe:${key}`,
-    });
-  }
-
-  // ── Word / silence deletions ──────────────────────────────────────────
-  // Adjacent deleted entries form one run and are cut as a single contiguous
-  // range — including any pauses between them. Cutting word-by-word left
-  // every internal pause longer than ~130 ms behind as a sliver of audio.
-  if (enrichedWords.length > 0 && deletedWords.size > 0) {
-    const runs: [number, number][] = [];
-    for (const idx of [...deletedWords].sort((a, b) => a - b)) {
-      const last = runs[runs.length - 1];
-      if (last && idx === last[1] + 1) last[1] = idx;
-      else runs.push([idx, idx]);
-    }
-
-    for (const [firstIdx, lastIdx] of runs) {
-      const first = enrichedWords[firstIdx];
-      const last  = enrichedWords[lastIdx];
-      if (!first || !last) continue;
-
-      // Neighbours of a maximal run are always kept entries.
-      const prevWord = firstIdx > 0 ? enrichedWords[firstIdx - 1] : null;
-      const nextWord = lastIdx < enrichedWords.length - 1 ? enrichedWords[lastIdx + 1] : null;
-
-      // Pad into the gap to a kept word (a full pad when the neighbour is silence).
-      const gapBefore = prevWord && !prevWord.isSilence ? first.startMs - prevWord.endMs : TRIM_PAD_MS;
-      const gapAfter  = nextWord && !nextWord.isSilence ? nextWord.startMs - last.endMs  : TRIM_PAD_MS;
-      const expandStart = first.isSilence ? 0 : Math.min(TRIM_PAD_MS, Math.max(0, gapBefore));
-      const expandEnd   = last.isSilence  ? 0 : Math.min(TRIM_PAD_MS, Math.max(0, gapAfter));
-      let startMs = first.startMs - expandStart;
-      let endMs   = last.endMs    + expandEnd;
-
-      if (energy) {
-        if (!first.isSilence && prevWord && !prevWord.isSilence && gapBefore < TRIM_PAD_MS) {
-          const q = quietestPoint(energy, first.startMs, GENTLE_BEFORE_MS, GENTLE_AFTER_MS);
-          if (q !== null && q > prevWord.startMs) startMs = q;
-        }
-        if (!last.isSilence && nextWord && !nextWord.isSilence && gapAfter < TRIM_PAD_MS) {
-          const q = quietestPoint(energy, nextWord.startMs, GENTLE_BEFORE_MS, GENTLE_AFTER_MS);
-          if (q !== null && q > last.startMs && q < nextWord.endMs) endMs = q;
-        }
-      }
-
-      const startKey = `ws:${firstIdx}`;
-      const endKey   = `we:${lastIdx}`;
-      rawOps.push({
-        startMs: adjustments.get(startKey) ?? startMs,
-        endMs:   adjustments.get(endKey)   ?? endMs,
-        startKey,
-        endKey,
-      });
-    }
-  }
-
-  // ── Free-range cuts (audio with no transcript word) ───────────────────
-  // Used exactly as drawn — gentle splicing (zero-crossing snap + equal-power
-  // crossfade) is applied in Rust at preview/export time.
-  for (const r of rangeOps) {
-    const startKey = `rs:${r.id}`;
-    const endKey   = `re:${r.id}`;
-    rawOps.push({
-      startMs: adjustments.get(startKey) ?? r.startMs,
-      endMs:   adjustments.get(endKey)   ?? r.endMs,
-      startKey,
-      endKey,
-    });
-  }
-
-  const valid = rawOps.filter((op) => op.endMs - op.startMs > 1);
-  if (valid.length === 0) return [];
-
-  // Sort by start, then merge overlapping / adjacent ops (≤ 10 ms gap),
-  // keeping track of which edge each merged boundary came from.
-  valid.sort((a, b) => a.startMs - b.startMs);
-  const ops: TimeOp[] = [];
-  for (const op of valid) {
-    const last = ops[ops.length - 1];
-    if (last && op.startMs <= last.endMs + 10) {
-      if (op.endMs > last.endMs) {
-        last.endMs  = op.endMs;
-        last.endKey = op.endKey;
-      }
-    } else {
-      ops.push({ ...op });
-    }
-  }
-  return ops;
-}
-
 // ─── Editor body ──────────────────────────────────────────────────────────────
 
 interface EditorBodyProps {
   project:           Project;
   viewMode:          ViewMode;
+  selectionRange: SelectionRange | null;
+  selectedWordIndices: number[] | null;
+  referenceIndices: number[] | null;
   onWordClick:       (attrs: { id: string; startMs: number; endMs: number; text: string }) => void;
   onSelectionChange: (range: SelectionRange | null) => void;
   onContextMenu:     (e: TranscriptContextEvent) => void;
   activeWordId:      string | null;
+  audioState: WordAudioState;
+  following: boolean;
+  onManualScroll: () => void;
   transcript:        ReturnType<typeof useTranscript>['transcript'];
   loading:           boolean;
   error:             string | null;
@@ -323,6 +204,7 @@ interface EditorBodyProps {
   onRealign:         () => Promise<void>;
   enrichedWords:     EnrichedWord[];
   currentOps:        TimeOp[];
+  editPlan:          EditPlan;
   /** Added pauses, shown between the words (Flow view). */
   textTokens:        TextToken[];
   /** The Speech enhancement tool in the inspector. */
@@ -350,8 +232,9 @@ interface EditorBodyProps {
 // (at word boundaries, ~once per 300-500ms), so memo cuts re-renders by ~100×.
 const EditorBody = memo(function EditorBody({
   project, viewMode, onWordClick, onSelectionChange, onContextMenu, activeWordId, transcript, loading, error,
-  editActions, onUndoAction, alignerReady, onRealign, enrichedWords, currentOps,
-  textTokens, enhanceTool, speakerTool, pauseTool, addedPauses, speakerLabels, exportWords, banner, onRetry,
+  editActions, onUndoAction, alignerReady, onRealign, enrichedWords, currentOps, editPlan,
+  textTokens, enhanceTool, speakerTool, pauseTool, addedPauses, speakerLabels, exportWords, banner, onRetry, audioState, following, onManualScroll,
+  selectionRange, selectedWordIndices, referenceIndices,
 }: EditorBodyProps) {
   if (loading) {
     return (
@@ -368,11 +251,14 @@ const EditorBody = memo(function EditorBody({
     <>
       <div className="wave-editor-main">
       {banner}
-      <div className="wave-editor-scroll">
+      <div className="wave-editor-scroll" tabIndex={0} aria-label="Transcript editor" onWheel={onManualScroll} onPointerDown={e => { if (e.target === e.currentTarget) onManualScroll(); }}>
         {viewMode === 'flow' ? (
           <TranscriptEditor
+            selectionRange={selectionRange} selectedWordIndices={selectedWordIndices} referenceIndices={referenceIndices}
             words={enrichedWords}
             activeWordId={activeWordId}
+            audioState={audioState}
+            following={following}
             onWordClick={onWordClick}
             onSelectionChange={onSelectionChange}
             onContextMenu={onContextMenu}
@@ -381,12 +267,16 @@ const EditorBody = memo(function EditorBody({
           />
         ) : (
           <SegmentsView
+            selectionRange={selectionRange} selectedWordIndices={selectedWordIndices} referenceIndices={referenceIndices}
             words={enrichedWords}
             activeWordId={activeWordId}
+            audioState={audioState}
+            following={following}
             onWordClick={onWordClick}
             onSelectionChange={onSelectionChange}
             onContextMenu={onContextMenu}
             speakers={speakerLabels}
+            tokens={textTokens}
           />
         )}
       </div>
@@ -398,6 +288,7 @@ const EditorBody = memo(function EditorBody({
         projectId={project.id}
         filteredWords={exportWords}
         currentOps={currentOps}
+        editPlan={editPlan}
         editActions={editActions}
         onUndoAction={onUndoAction}
         alignerReady={alignerReady}
@@ -443,7 +334,8 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
   /** The word being corrected (its index in enrichedWords). */
   const [correcting,      setCorrecting]     = useState<number | null>(null);
   const [isLooping,       setIsLooping]      = useState(false);
-  const [editActions,     setEditActions]    = useState<EditAction[]>([]);
+  const history = useEditHistory();
+  const { actions: editActions, set: setEditActions, hydrate: hydrateEdits, undo: undoLast, redo } = history;
   const [waveformHeight,  setWaveformHeight] = useState(240);
   // Local override of the project name so it updates instantly after rename.
   const [projectName, setProjectName] = useState(project.name);
@@ -500,7 +392,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
     setActiveWordRegion, clearActiveWordRegion,
     setSelectionRegion,  clearSelectionRegion,
     setReferenceRegion,  clearReferenceRegion,
-    setCuts, setInserts,
+    setCuts, setEditPlan,
     energy,
     waveError,
   } = waveform;
@@ -554,11 +446,11 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
     });
   }, [transcribedWords, correctionsKey]);
 
-  // Words kept for export: deleted entries removed, silence sentinels removed
-  // (they are internal editing helpers, not real transcript content).
+  // Silence sentinels are internal helpers. The shared plan decides which
+  // spoken words retain any audio, including manually revealed fragments.
   const filteredWords = useMemo<EnrichedWord[]>(
-    () => enrichedWords.filter((w, i) => !deletedWords.has(i) && !w.isSilence),
-    [enrichedWords, deletedWords]
+    () => enrichedWords.filter(w => !w.isSilence),
+    [enrichedWords]
   );
 
   // Who says each word, from the saved speaker segments (when shown).
@@ -580,11 +472,11 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
 
   const exportWordsOriginal = useMemo(
     () => (speakerLabels
-      ? enrichedWords.flatMap((w, i) => (!deletedWords.has(i) && !w.isSilence
+      ? enrichedWords.flatMap((w, i) => (!w.isSilence
         ? [{ ...w, speaker: speakerLabels.of[i] !== null ? speakerLabels.names[speakerLabels.of[i]!] : undefined }]
         : []))
       : filteredWords),
-    [speakerLabels, enrichedWords, deletedWords, filteredWords]
+    [speakerLabels, enrichedWords, filteredWords]
   );
 
   // Raw time-range cuts (waveform selections not associated with any word —
@@ -622,16 +514,16 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
   const addedPausesRef = useRef(addedPauses);
   addedPausesRef.current = addedPauses;
 
-  // Text and subtitle exports time the words as the exported audio has them:
-  // less what's cut before each, plus the pauses added before it.
-  const exportWords = useMemo(
-    () => exportWordsOriginal.map((w) => ({
-      ...w,
-      startMs: editedTime(w.startMs, currentOps, addedPauses, 'start'),
-      endMs:   editedTime(w.endMs, currentOps, addedPauses, 'end'),
-    })),
-    [exportWordsOriginal, currentOps, addedPauses],
+  const editPlan = useMemo(
+    () => buildEditPlan(waveform.durationMs || transcript?.durationMs || 0, currentOps, addedPauses),
+    [waveform.durationMs, transcript?.durationMs, currentOps, addedPauses],
   );
+  const timelinePauses = useMemo(() => resolvePauseMarkers(addedPauses, editPlan.cuts, editPlan.sourceDurationMs), [addedPauses, editPlan]);
+  const exportWords = useMemo(() => mapEditedWords(editPlan, exportWordsOriginal), [editPlan, exportWordsOriginal]);
+  const editingReady = energy !== null && waveform.audioReady;
+  const canEditRef = useRef(false);
+  canEditRef.current = editingReady && editsReady;
+  const editRevision = useMemo(() => crypto.randomUUID(), [project.id, transcript, editActions, editPlan, editingReady]);
 
   // The pauses added by hand, as tokens in the text.
   const textTokens = useMemo<TextToken[]>(
@@ -684,7 +576,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
   useEffect(() => {
     if (!transcript || editsLoadStartedRef.current) return;
     editsLoadStartedRef.current = true;
-    invoke<string | null>('load_edits', { projectId: project.id })
+    loadEdits(project.id)
       .then((json) => {
         if (!json) return;
         try {
@@ -694,7 +586,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
 
           // Legacy shape: a bare array with no fingerprint — apply as-is.
           if (Array.isArray(parsed)) {
-            if (parsed.length > 0) setEditActions(parsed);
+            if (parsed.length > 0) hydrateEdits(parsed);
             return;
           }
 
@@ -706,7 +598,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
             return;
           }
           if (Array.isArray(parsed.actions) && parsed.actions.length > 0) {
-            setEditActions(parsed.actions);
+            hydrateEdits(parsed.actions);
           }
         } catch {
           // Corrupted — start fresh
@@ -721,10 +613,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
     // Don't save until the initial load has completed, to avoid stomping
     // saved edits with an empty array before we've read them.
     if (!editsLoadedRef.current) return;
-    invoke('save_edits', {
-      projectId: project.id,
-      data: JSON.stringify({ v: 2, fingerprint: transcriptFingerprint, actions: editActions }),
-    }).catch((e) => console.warn('Could not save edits:', e));
+    saveEdits(project.id, JSON.stringify({ v: 2, fingerprint: transcriptFingerprint, actions: editActions })).catch((e) => console.warn('Could not save edits:', e));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editActions]);
 
@@ -760,15 +649,9 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectionRange]);
 
-  // ── Loop the selection ────────────────────────────────────────────────────
-  // (Cuts are skipped by the player itself, on the audio clock — see EditPlayer.)
   useEffect(() => {
-    if (!waveform.isPlaying) return;
-    if (isLooping && selectionRange && waveform.currentMs >= selectionRange.endMs) {
-      waveformRef.current.seek(selectionRange.startMs);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [waveform.currentMs]);
+    waveform.setLoop(isLooping ? selectionRange : null);
+  }, [isLooping, selectionRange, waveform.setLoop]);
 
   // ── Sync selection → waveform region ─────────────────────────────────────
   useEffect(() => {
@@ -779,85 +662,26 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
     }
   }, [selectionRange, setSelectionRegion, clearSelectionRegion]);
 
-  // ── Sync selection → word highlight (DOM) ────────────────────────────────
-  // Words wholly inside the selection are selected; words it only touches get
-  // a lighter mark, so a tiny trim at a word's edge doesn't look like the word.
-  useEffect(() => {
-    document.querySelectorAll('.wave-word--selected, .wave-word--selected-part').forEach(
-      (el) => el.classList.remove('wave-word--selected', 'wave-word--selected-part')
-    );
-    if (wordSelection) {
-      for (const i of wordSelection.indices) document.querySelector(`[data-word-id="w${i}"]`)?.classList.add('wave-word--selected');
-      return;
-    }
-    if (!selectionRange || enrichedWords.length === 0) return;
-    enrichedWords.forEach((word, i) => {
-      if (word.endMs > selectionRange.startMs && word.startMs < selectionRange.endMs) {
-        const whole = word.startMs >= selectionRange.startMs - 1 && word.endMs <= selectionRange.endMs + 1;
-        document.querySelector(`[data-word-id="w${i}"]`)
-          ?.classList.add(whole ? 'wave-word--selected' : 'wave-word--selected-part');
-      }
-    });
-  }, [selectionRange, wordSelection, enrichedWords, viewMode, textTokens, speakerLabels]);
-
   // ── Words touched by cuts drawn on the waveform ──────────────────────────
   // A range cut can swallow a word or trim part of one without the word being
   // deleted as text. The transcript shows that too: struck through when it's
   // (almost) all gone, a wavy underline when part of it is.
-  const { fullCutWords, partCutWords } = useMemo(() => {
-    const full = new Set<number>();
-    const part = new Set<number>();
-    const covered = new Map<number, number>();
-    for (const r of rangeOps) {
-      const s = adjustments.get(`rs:${r.id}`) ?? r.startMs;
-      const e = adjustments.get(`re:${r.id}`) ?? r.endMs;
-      enrichedWords.forEach((w, i) => {
-        if (w.isSilence || deletedWords.has(i) || w.endMs <= s || w.startMs >= e) return;
-        covered.set(i, (covered.get(i) ?? 0) + Math.min(w.endMs, e) - Math.max(w.startMs, s));
-      });
-    }
-    covered.forEach((ms, i) => {
-      const w = enrichedWords[i];
-      if (ms >= 0.9 * (w.endMs - w.startMs)) full.add(i);
-      else if (ms >= 10) part.add(i);
-    });
-    return { fullCutWords: full, partCutWords: part };
-  }, [rangeOps, adjustments, enrichedWords, deletedWords]);
-
-  useEffect(() => {
-    document.querySelectorAll('.wave-word--cutaudio, .wave-word--partcut').forEach(
-      (el) => el.classList.remove('wave-word--cutaudio', 'wave-word--partcut')
-    );
-    fullCutWords.forEach((i) => document.querySelector(`[data-word-id="w${i}"]`)?.classList.add('wave-word--cutaudio'));
-    partCutWords.forEach((i) => document.querySelector(`[data-word-id="w${i}"]`)?.classList.add('wave-word--partcut'));
-  }, [fullCutWords, partCutWords, enrichedWords, viewMode, textTokens, speakerLabels]);
+  const audioState = useMemo(
+    () => wordAudioState(enrichedWords, currentOps, waveform.durationMs),
+    [enrichedWords, currentOps, waveform.durationMs],
+  );
+  const { fullCutWords, partCutWords } = audioState;
 
   // ── Reference highlight (right-click) → waveform region + word marks ──────
   useEffect(() => {
-    document.querySelectorAll('.wave-word--reference').forEach(
-      (el) => el.classList.remove('wave-word--reference')
-    );
     if (!reference) {
       clearReferenceRegion();
       return;
     }
     setReferenceRegion(reference.startMs, reference.endMs);
-    reference.wordIndices.forEach((idx) => {
-      document.querySelector(`[data-word-id="w${idx}"]`)?.classList.add('wave-word--reference');
-    });
   }, [reference, enrichedWords, viewMode, textTokens, speakerLabels, waveform.durationMs, setReferenceRegion, clearReferenceRegion]);
 
-  // ── DOM effect: mark deleted words ────────────────────────────────────────
-  // Also re-run when the words change (e.g. re-alignment) or the view switches:
-  // the transcript DOM is rebuilt then, dropping these classes.
-  useEffect(() => {
-    document.querySelectorAll('.wave-word--deleted').forEach(
-      (el) => el.classList.remove('wave-word--deleted')
-    );
-    deletedWords.forEach((idx) => {
-      document.querySelector(`[data-word-id="w${idx}"]`)?.classList.add('wave-word--deleted');
-    });
-  }, [deletedWords, enrichedWords, viewMode, textTokens, speakerLabels]);
+  useEffect(() => { setEditPlan(editPlan); }, [editPlan, setEditPlan]);
 
   // ── Sync cuts → player + waveform ─────────────────────────────────────────
   // Non-destructive: the original audio is untouched; the player skips cuts
@@ -866,26 +690,23 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
   useEffect(() => {
     setCuts(currentOps);
   }, [currentOps, setCuts]);
-  useEffect(() => {
-    setInserts(addedPauses);
-  }, [addedPauses, setInserts]);
 
   // A cut edge dragged on the waveform → an undoable adjustment of that edge.
-  const handleCutResize = useCallback((index: number, startMs: number, endMs: number) => {
-    const op = currentOpsRef.current[index];
-    if (!op) return;
+  const handleCutResize = useCallback((op: TimeOp, startMs: number, endMs: number) => {
+    startMs = Math.abs(startMs - op.startMs) >= 0.001 ? Math.round(startMs) : op.startMs;
+    endMs = Math.abs(endMs - op.endMs) >= 0.001 ? Math.round(endMs) : op.endMs;
+    if (!canEditRef.current || endMs - startMs < 1 || !currentOpsRef.current.includes(op)) return;
     const now = Date.now();
     const nudges: EditAction[] = [];
-    if (op.startKey && Math.abs(startMs - op.startMs) > 1) {
-      nudges.push({ id: `${now}-s-${Math.random()}`, wordIndices: [], adjust: { key: op.startKey, ms: Math.round(startMs) },
+    if (op.startKey && Math.abs(startMs - op.startMs) >= 0.001) {
+      nudges.push({ id: `${now}-s-${Math.random()}`, wordIndices: [], adjust: { key: op.startKey, ms: startMs },
         label: `Cut start → ${fmtPrecise(startMs)}`, createdAt: now });
     }
-    if (op.endKey && Math.abs(endMs - op.endMs) > 1) {
-      nudges.push({ id: `${now}-e-${Math.random()}`, wordIndices: [], adjust: { key: op.endKey, ms: Math.round(endMs) },
+    if (op.endKey && Math.abs(endMs - op.endMs) >= 0.001) {
+      nudges.push({ id: `${now}-e-${Math.random()}`, wordIndices: [], adjust: { key: op.endKey, ms: endMs },
         label: `Cut end → ${fmtPrecise(endMs)}`, createdAt: now });
     }
     if (nudges.length > 0) {
-      redoRef.current = [];
       setEditActions((prev) => [...prev, ...nudges]);
     }
   }, []);
@@ -913,8 +734,8 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
     const id = [...ids][0] as number;
     return { id, name: labels.names[id] ?? `Speaker ${id + 1}` };
   };
-  const deletedWordsRef   = useRef(deletedWords);
-  deletedWordsRef.current = deletedWords;
+  const deletedWordsRef   = useRef(fullCutWords);
+  deletedWordsRef.current = fullCutWords;
 
   // ── Right-click → a context menu, and nothing else ─────────────────────────
   // Like any context menu, opening it changes nothing: no highlight, no zoom,
@@ -923,15 +744,15 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
 
   // Transcript: right-clicking inside the selection means the whole selection,
   // otherwise the word (or, from a Segments timestamp, the segment).
+  const openPauseMenu = useCallback((pauseId: string, source: 'transcript' | 'timeline', x: number, y: number) => {
+    const pause = addedPausesRef.current.find(p => p.id === pauseId);
+    if (!pause) return;
+    setContextMenu({ kind: 'pause', source, x, y, startMs: pause.atMs, endMs: pause.atMs,
+      wordIndices: [], title: `Added pause (+${fmtSeconds(pause.ms)})`, allDeleted: false, pauseId, pauseMs: pause.ms });
+  }, []);
   const handleTranscriptContextMenu = useCallback(({ wordIndices, pauseId, clientX, clientY }: TranscriptContextEvent) => {
     const words = enrichedWordsRef.current;
-    if (pauseId) {
-      const p = addedPausesRef.current.find((x) => x.id === pauseId);
-      if (!p) return;
-      setContextMenu({ kind: 'pause', source: 'transcript', x: clientX, y: clientY, startMs: p.atMs, endMs: p.atMs,
-        wordIndices: [], title: `Added pause (+${fmtSeconds(p.ms)})`, allDeleted: false, pauseId });
-      return;
-    }
+    if (pauseId) { openPauseMenu(pauseId, 'transcript', clientX, clientY); return; }
     let indices = wordIndices.filter((i) => words[i]);
     if (indices.length === 0) return;
     const sel = selectionRangeRef.current;
@@ -951,6 +772,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
       startMs: first.startMs, endMs: last.endMs, wordIndices: indices,
       title:      indices.length > 1 ? `${indices.length} words` : first.isSilence ? 'Silence' : `"${first.text}"`,
       allDeleted: indices.every((i) => deletedWordsRef.current.has(i)),
+      hasCutAudio: indices.some(i => currentOpsRef.current.some(c => c.endMs > words[i].startMs && c.startMs < words[i].endMs)),
       speaker:    speakerOf(indices),
       word:       indices.length === 1 && !first.isSilence ? { correctedFrom: first.correctedFrom } : undefined,
     });
@@ -968,6 +790,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
       setContextMenu({
         kind, source: 'timeline', x: clientX, y: clientY, startMs, endMs, wordIndices, title,
         allDeleted: wordIndices.length > 0 && wordIndices.every((i) => deleted.has(i)),
+        hasCutAudio: wordIndices.some(i => currentOpsRef.current.some(c => c.endMs > words[i].startMs && c.startMs < words[i].endMs)),
         speaker:    kind === 'words' ? speakerOf(wordIndices) : undefined,
         word:       kind === 'words' && wordIndices.length === 1 && !words[wordIndices[0]].isSilence
           ? { correctedFrom: words[wordIndices[0]].correctedFrom } : undefined,
@@ -1040,11 +863,12 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
       startMs = snap(startMs);
       endMs   = snap(endMs);
     }
+    startMs = Math.round(startMs); endMs = Math.round(endMs);
     if (endMs - startMs < 1) return;
     setSelectionRange((prev) =>
-      prev && Math.abs(prev.startMs - startMs) < 0.5 && Math.abs(prev.endMs - endMs) < 0.5
+      prev?.kind === 'audio' && Math.abs(prev.startMs - startMs) < 0.001 && Math.abs(prev.endMs - endMs) < 0.001
         ? prev
-        : { startMs, endMs });
+        : { startMs, endMs, kind: 'audio' });
   }, []);
 
   // ── Hovering the waveform underlines the word there in the transcript ──────
@@ -1101,7 +925,20 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
   // tick because currentMs is part of spread state).
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.isComposing || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.target instanceof HTMLElement && e.target.isContentEditable && !e.target.closest('.wave-transcript-editor')) return;
+      if ((e.metaKey || e.ctrlKey) && !['z', 'Z', '0', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+      if (shortcutsOpenRef.current || (e.target instanceof Element && e.target.closest('.cds--modal'))) return;
+      if (e.key === 'F6') {
+        e.preventDefault();
+        const inAudio = e.target instanceof Element && e.target.closest('.wave-timeline');
+        document.querySelector<HTMLElement>(inAudio ? '.wave-editor-scroll' : '.wave-timeline')?.focus({ preventScroll: true });
+        return;
+      }
+      if (e.target instanceof Element && e.target.closest('button, a, select, [role="button"], [role="menu"], [role="menuitem"], [role="tab"], [role="slider"], [role="separator"]')) return;
+      if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault(); editRef.current.jumpToCut(e.key === 'ArrowDown' ? 1 : -1); return;
+      }
       // The shortcuts sheet is modal; it handles its own keys (Esc closes it).
       if (shortcutsOpenRef.current) return;
       // So is any other dialog (About, opened from the menu over the editor).
@@ -1193,16 +1030,6 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
           if (editRef.current.correctSelection()) e.preventDefault();
           break;
         }
-        case 'Tab': {
-          // Tab / ⇧Tab: next / previous cut (2 s before it). Not while a
-          // button or menu has focus, so keyboard navigation still works.
-          const focused = document.activeElement;
-          if (focused && focused !== document.body
-              && focused.closest('button, a, input, select, textarea, [role="menu"], [role="menuitem"], [role="tab"]')) break;
-          e.preventDefault();
-          editRef.current.jumpToCut(e.shiftKey ? -1 : 1);
-          break;
-        }
         // Zoom: = / + to zoom in, - to zoom out, ⌘0 to reset. The focus is
         // the mouse if it's over the waveform, else the selection, else the playhead.
         case '=': case '+':
@@ -1230,47 +1057,35 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
   // undoAction is stable (pure setState, no deps) — required for memo(EditorBody).
   // Undo and redo. An edit that's part of an agent's group goes with the whole
   // group. What's undone waits on the redo stack until a new edit is made.
-  // editActionsRef runs ahead of renders, so quick repeated ⌘Zs each count.
-  const editActionsRef = useRef(editActions);
-  editActionsRef.current = editActions;
-  const redoRef = useRef<EditAction[][]>([]);
+  // The transaction store updates synchronously, so rapid undo presses each count.
   const undoAction = useCallback((id: string) => {
-    const all = editActionsRef.current;
-    const target = all.find((a) => a.id === id);
-    if (!target) return;
-    const gone = target.group ? all.filter((a) => a.group?.id === target.group!.id) : [target];
-    const ids = new Set(gone.map((a) => a.id));
-    redoRef.current.push(gone);
-    editActionsRef.current = all.filter((a) => !ids.has(a.id));
-    setEditActions((prev) => prev.filter((a) => !ids.has(a.id)));
-  }, []);
-  const undoLast = useCallback(() => {
-    const last = editActionsRef.current[editActionsRef.current.length - 1];
-    if (last) undoAction(last.id);
-  }, [undoAction]);
-  const redo = useCallback(() => {
-    const batch = redoRef.current.pop();
-    if (!batch) return;
-    editActionsRef.current = [...editActionsRef.current, ...batch];
-    setEditActions((prev) => [...prev, ...batch]);
-  }, []);
+    setEditActions((all) => {
+      const target = all.find(a => a.id === id);
+      if (!target) return all;
+      return all.filter(a => target.group ? a.group?.id !== target.group.id : a.id !== id);
+    });
+  }, [setEditActions]);
 
   // The group the edits being made now belong to (an agent call, see `agentApi`).
   const agentGroupRef = useRef<EditAction['group'] | null>(null);
 
   /** A new edit. Built before it's queued, so it picks up the current group. */
   function newAction(fields: Omit<EditAction, 'id' | 'createdAt' | 'group'>): EditAction {
-    redoRef.current = []; // a new edit ends what can be redone
     const group = agentGroupRef.current;
     return { id: `${Date.now()}-${Math.random()}`, createdAt: Date.now(), ...fields, ...(group ? { group } : {}) };
   }
 
   /** Cut these words (those not already cut) as one undoable edit. */
   function deleteWords(indices: number[], label?: string) {
-    const fresh = indices.filter((i) => !deletedWords.has(i));
-    if (fresh.length === 0) return;
-    const action = newAction({ wordIndices: fresh, label: label ?? wordsLabel(enrichedWords, fresh) });
-    setEditActions((prev) => [...prev, action]);
+    if (!canEditRef.current) return;
+    const { kept, fresh, revealed } = wordCutIntent(indices.filter(i => enrichedWords[i]), deletedWords, fullCutWords);
+    if (!kept.length) return;
+    const actions = [
+      ...(fresh.length ? [newAction({ wordIndices: fresh, label: label ?? wordsLabel(enrichedWords, fresh) })] : []),
+      ...revealed.map(i => newAction({ wordIndices: [], range: { startMs: enrichedWords[i].startMs, endMs: enrichedWords[i].endMs }, label: label ?? wordsLabel(enrichedWords, [i]) })),
+    ];
+    const group = agentGroupRef.current ?? (actions.length > 1 ? { id: crypto.randomUUID(), label: label ?? wordsLabel(enrichedWords, kept) } : undefined);
+    setEditActions(prev => [...prev, ...actions.map(a => group ? { ...a, group } : a)]);
   }
 
   /** Select every word `speaker` says (merges included) that isn't cut yet. */
@@ -1278,13 +1093,14 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
     const labels = speakerOfWord;
     if (!labels) return;
     const root = rootSpeaker(speaker, speakerAnalysis?.speakers ?? []);
-    const indices = enrichedWords.flatMap((w, i) => (!w.isSilence && labels.of[i] === root && !deletedWords.has(i) ? [i] : []));
+    const indices = enrichedWords.flatMap((w, i) => (!w.isSilence && labels.of[i] === root && !fullCutWords.has(i) ? [i] : []));
     setSelectionRange(null);
     setWordSelection(indices.length > 0 ? { indices, speaker: root, label: `Everything ${labels.names[root] ?? `Speaker ${root + 1}`} said` } : null);
   }
 
   /** Add `ms` of the room's own quiet at `atMs` (original time), as one edit. */
   function addPause(atMs: number, ms: number) {
+    if (!canEditRef.current) return;
     const tone = findRoomTone(energy, enrichedWords, atMs);
     const action = newAction({
       wordIndices: [],
@@ -1292,6 +1108,17 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
       label:       `pause +${fmtSeconds(ms)} at ${fmtPrecise(atMs)}`,
     });
     setEditActions((prev) => [...prev, action]);
+  }
+
+  function resizePause(id: string, ms: number) {
+    if (!canEditRef.current || !PAUSE_LENGTHS.includes(ms)) return;
+    setEditActions(prev => prev.map(action => action.id === id && action.insert && action.insert.ms !== ms
+      ? { ...action, group: undefined, insert: { ...action.insert, ms }, label: `pause +${fmtSeconds(ms)} at ${fmtPrecise(action.insert.atMs)}` } : action));
+  }
+
+  function removePause(id: string) {
+    if (!canEditRef.current) return;
+    setEditActions(prev => prev.filter(action => action.id !== id));
   }
 
   /** Add a pause after word `index`: in the middle of the gap to the next kept word, or at its end. */
@@ -1343,8 +1170,9 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
 
   /** Cut exactly [startMs, endMs] of audio (a pause, a breath, a word's tail…). */
   function cutRange(startMs: number, endMs: number) {
+    if (!canEditRef.current) return;
     const durMs = endMs - startMs;
-    if (durMs < 2) return; // ignore stray zero-width selections
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || durMs < 1) return; // ignore stray zero-width selections
     const action = newAction({
       wordIndices: [],
       range:       { startMs, endMs },
@@ -1358,6 +1186,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
    * heard takes the word's corrections back off instead.
    */
   function correctWord(index: number, typed: string) {
+    if (!editsReady) return;
     const word = enrichedWords[index];
     const text = typed.trim().replace(/\s+/g, ' ');
     if (!word || word.isSilence || !text || text === word.text) return;
@@ -1376,7 +1205,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
 
   /** Back to what transcription heard. */
   function revertCorrection(index: number) {
-    redoRef.current = [];
+    if (!editsReady) return;
     setEditActions((prev) => prev.filter((a) => a.correction?.index !== index));
   }
 
@@ -1384,72 +1213,39 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
   function correctSelection(): boolean {
     const sr = selectionRangeRef.current;
     if (!sr || wordSelectionRef.current) return false;
-    const words = wordsExactlyIn(sr);
+    const words = selectionWordIndices(sr, enrichedWords) ?? wordsExactlyIn(sr);
     if (!words || words.length !== 1 || enrichedWords[words[0]].isSilence) return false;
     setCorrecting(words[0]);
     return true;
   }
 
-  /**
-   * Undo the effect of edits on these words / free-range cuts: take the words
-   * out of the edits that cut them, drop the range cuts, and drop the edge
-   * nudges that belonged to either.
-   */
-  function removeFromEdits(
-    words:       ReadonlySet<number>,
-    rangeIds:    ReadonlySet<string> = new Set(),
-    fillerSpans: readonly { startMs: number; endMs: number }[] = [],
-  ) {
-    redoRef.current = [];
-    const fillerKeys = new Set(fillerSpans.map((f) => String(Math.round(f.startMs))));
-    const hitsFiller = (f: { startMs: number; endMs: number }) =>
-      fillerSpans.some((s) => f.endMs > s.startMs && f.startMs < s.endMs);
-    setEditActions((prev) => prev.flatMap((a) => {
-      if (a.range) return rangeIds.has(a.id) ? [] : [a];
-      if (a.adjust) {
-        const side = a.adjust.key.slice(0, 2);
-        const ref  = a.adjust.key.slice(3);
-        if ((side === 'rs' || side === 're') && rangeIds.has(ref)) return [];
-        if ((side === 'ws' || side === 'we') && words.has(Number(ref))) return [];
-        if ((side === 'fs' || side === 'fe') && fillerKeys.has(ref)) return [];
-        return [a];
-      }
-      const touchesWords   = a.wordIndices.some((i) => words.has(i));
-      const touchesFillers = a.fillers?.some(hitsFiller) ?? false;
-      if (!touchesWords && !touchesFillers) return [a];
-      const restWords   = a.wordIndices.filter((i) => !words.has(i));
-      const restFillers = (a.fillers ?? []).filter((f) => !hitsFiller(f));
-      if (restWords.length === 0 && restFillers.length === 0) return [];
-      return [{
-        ...a,
-        wordIndices: restWords,
-        fillers:     restFillers.length > 0 ? restFillers : undefined,
-        // A filler-removal edit keeps its "N fillers" label; a word edit is relabelled.
-        label:       a.fillers ? fillersLabel(restWords.length + restFillers.length) : wordsLabel(enrichedWords, restWords),
-      }];
-    }));
+  /** Restoration is one transaction over the actual audio, even for manual cuts. */
+  function restoreAudio(spans: SelectionRange[]) {
+    if (!canEditRef.current) return;
+    const before = currentOpsRef.current;
+    const remaining = subtractRanges(before, spans);
+    if (remaining.length === before.length && remaining.every((r, i) => r === before[i])) return;
+    const group = { id: crypto.randomUUID(), label: 'Restore audio', agent: agentGroupRef.current?.agent };
+    // Materialise the resolved cuts so unrelated manual edges and transition
+    // settings stay exact. Undo restores the original word-based edit history.
+    setEditActions(prev => [
+      ...prev.flatMap(action => {
+        if (!action.wordIndices.length && !action.range && !action.adjust && !action.fillers?.length) return [action];
+        return action.correction || action.insert ? [{ ...action, wordIndices: [], range: undefined, adjust: undefined, fillers: undefined }] : [];
+      }),
+      ...remaining.map(range => ({
+        id: crypto.randomUUID(), createdAt: Date.now(), group, wordIndices: [],
+        range: { startMs: range.startMs, endMs: range.endMs, fadeMs: range.fadeMs, review: range.review, manualBoundary: range.manualBoundary || !!((range.startKey && adjustments.has(range.startKey)) || (range.endKey && adjustments.has(range.endKey))) },
+        label: `Cut ${fmtPrecise(range.startMs)}–${fmtPrecise(range.endMs)}`,
+      })),
+    ]);
   }
 
-  /** Bring cut words back. */
   function restoreWords(indices: number[]) {
-    removeFromEdits(new Set(indices));
+    restoreAudio(indices.flatMap(i => enrichedWords[i] ? [enrichedWords[i]] : []));
   }
 
-  /** Remove the cut covering [startMs, endMs]: its words and range cuts. */
-  function restoreCut(startMs: number, endMs: number) {
-    const words = new Set(enrichedWords
-      .map((w, i) => (deletedWords.has(i) && w.endMs > startMs && w.startMs < endMs ? i : -1))
-      .filter((i) => i >= 0));
-    const rangeIds = new Set(rangeOps
-      .filter((r) => {
-        const s = adjustments.get(`rs:${r.id}`) ?? r.startMs;
-        const e = adjustments.get(`re:${r.id}`) ?? r.endMs;
-        return e > startMs && s < endMs;
-      })
-      .map((r) => r.id));
-    const fillerSpans = fillerCuts.filter((f) => f.endMs > startMs && f.startMs < endMs);
-    removeFromEdits(words, rangeIds, fillerSpans);
-  }
+  function restoreCut(startMs: number, endMs: number) { restoreAudio([{ startMs, endMs }]); }
 
   // ── Previewing edits ──────────────────────────────────────────────────────
   // Hear a cut in context before (or after) making it: a little before, the
@@ -1459,7 +1255,8 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
   const PREVIEW_POST_MS = 1000;
 
   /** Preview [startMs, endMs] as it would sound cut (or as it is, if it already is). */
-  function previewEdit(startMs: number, endMs: number) {
+  function previewEdit(startMs: number, endMs: number, kind: 'words' | 'audio' = 'audio') {
+    if (!canEditRef.current) return;
     const wf = waveformRef.current;
     const existing = currentOps.find((o) => startMs >= o.startMs - 1 && endMs <= o.endMs + 1);
     if (existing) {
@@ -1468,12 +1265,13 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
     }
     // Exactly what Delete would cut (see cutSelectionRange): whole words with
     // the usual padding and gentle edges, or else the range as drawn.
-    const indices = wordsExactlyIn({ startMs, endMs })?.filter((i) => !deletedWords.has(i)) ?? [];
+    const active = selectionRangeRef.current;
+    const indices = selectionWordIndices({ startMs, endMs, kind, ...(kind === 'words' && active?.startMs === startMs && active.endMs === endMs ? { wordIndices: active.wordIndices } : {}) }, enrichedWords)?.filter(i => !fullCutWords.has(i)) ?? [];
     let extraCuts: TimeOp[] = [{ startMs, endMs }];
     if (indices.length > 0) {
       const hypothetical = new Set(deletedWords);
       indices.forEach((i) => hypothetical.add(i));
-      extraCuts = computeCutOps(enrichedWords, hypothetical, rangeOps, adjustments, energy, fillerCuts);
+      extraCuts = computeCutOps(enrichedWords, hypothetical, [...rangeOps, ...indices.filter(i => deletedWords.has(i)).map(i => ({ startMs: enrichedWords[i].startMs, endMs: enrichedWords[i].endMs, id: `preview:${i}` }))], adjustments, energy, fillerCuts);
     }
     wf.playRange(Math.max(0, startMs - PREVIEW_PRE_MS), endMs + PREVIEW_POST_MS, { extraCuts });
   }
@@ -1482,7 +1280,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
   function previewCurrent() {
     const r = selectionRangeRef.current ?? referenceRef.current;
     if (r) {
-      previewEdit(r.startMs, r.endMs);
+      previewEdit(r.startMs, r.endMs, selectionRangeRef.current?.kind ?? 'audio');
       return;
     }
     const now = waveformRef.current.currentMs;
@@ -1490,7 +1288,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
     if (op) previewEdit(op.startMs, op.endMs);
   }
 
-  /** Tab / ⇧Tab: move to 2 s before the next / previous cut and show it. */
+  /** ⌥↓ / ⌥↑: move to 2 s before the next / previous cut and show it. */
   function jumpToCut(direction: 1 | -1) {
     const wf  = waveformRef.current;
     const now = wf.currentMs;
@@ -1505,6 +1303,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
 
   /** Scroll the transcript to these words. */
   function showInTranscript(indices: number[]) {
+    document.querySelector<HTMLElement>('.wave-editor-scroll')?.focus({ preventScroll: true });
     if (indices.length === 0) return;
     document.querySelector(`[data-word-id="w${indices[0]}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
@@ -1532,12 +1331,13 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
    * selection to the words it touches.
    */
   function cutSelectionRange(range: SelectionRange) {
-    const words = wordsExactlyIn(range);
+    const words = selectionWordIndices(range, enrichedWords);
     if (words) deleteWords(words);
     else cutRange(range.startMs, range.endMs);
   }
 
   function deleteSelection() {
+    if (!canEditRef.current) return;
     const ws = wordSelectionRef.current;
     if (ws) {
       deleteWords(ws.indices, `${ws.label.replace(/^Everything/, 'everything')} (${ws.indices.length} words)`);
@@ -1564,19 +1364,22 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
       onPlay:             run((m) => wf.playRange(m.startMs, m.endMs)),
       onPlayOriginal:     run((m) => wf.playRange(m.startMs, m.endMs, { ignoreCuts: true })),
       onPlayFrom:         run((m) => { wf.seek(m.startMs); wf.play(); }),
-      onPreviewCut:       run((m) => previewEdit(m.startMs, m.endMs)),
-      onSelect:           run((m) => setSelectionRange({ startMs: m.startMs, endMs: m.endMs })),
+      onPreviewCut:       run((m) => previewEdit(m.startMs, m.endMs, m.source === 'transcript' ? 'words' : 'audio')),
+      onSelect:           run((m) => setSelectionRange({ startMs: m.startMs, endMs: m.endMs, kind: m.source === 'transcript' ? 'words' : 'audio', wordIndices: m.wordIndices })),
       onZoom:             run((m) => wf.zoomToRange(m.startMs, m.endMs)),
       // The only actions that mark a passage: outline it in the other view and bring it into view.
       onShowInTimeline:   run((m) => {
-        setReference({ startMs: m.startMs, endMs: m.endMs, wordIndices: m.wordIndices });
+        setReference(null);
+        setSelectionRange({ startMs: m.startMs, endMs: m.endMs, kind: m.source === 'transcript' ? 'words' : 'audio', wordIndices: m.wordIndices });
         wf.revealRange(m.startMs, m.endMs);
+        document.querySelector<HTMLElement>('.wave-timeline')?.focus({ preventScroll: true });
       }),
       onShowInTranscript: run((m) => {
-        setReference({ startMs: m.startMs, endMs: m.endMs, wordIndices: m.wordIndices });
+        setReference(null);
+        setSelectionRange({ startMs: m.startMs, endMs: m.endMs, kind: m.source === 'transcript' ? 'words' : 'audio', wordIndices: m.wordIndices });
         showInTranscript(m.wordIndices);
       }),
-      onDelete:           run((m) => (m.kind === 'range' ? cutSelectionRange(m) : deleteWords(m.wordIndices))),
+      onDelete:           run((m) => (m.source === 'timeline' || m.kind === 'range' ? cutRange(m.startMs, m.endMs) : deleteWords(m.wordIndices))),
       onRestore:          run((m) => (m.kind === 'cut' ? restoreCut(m.startMs, m.endMs) : restoreWords(m.wordIndices))),
       onClearHighlight:   run(() => setReference(null)),
       onSelectSpeaker:    run((m) => { if (m.speaker) selectSpeaker(m.speaker.id); }),
@@ -1586,27 +1389,28 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
         if (menu && menu.wordIndices.length > 0) addPauseAfter(menu.wordIndices[menu.wordIndices.length - 1], ms);
         setContextMenu(null);
       },
-      onRemovePause:      run((m) => { if (m.pauseId) undoAction(m.pauseId); }),
+      onResizePause: (ms) => { if (menu?.pauseId) resizePause(menu.pauseId, ms); setContextMenu(null); },
+      onRemovePause:      run((m) => { if (m.pauseId) removePause(m.pauseId); }),
     };
   }
 
   function deleteAtMs(ms: number) {
     if (enrichedWords.length === 0) return;
     const idx = findActiveWordIndex(enrichedWords, ms);
-    if (idx < 0 || deletedWords.has(idx)) return;
-    const word = enrichedWords[idx];
-    const action = newAction({ wordIndices: [idx], label: `"${word.text}" at ${fmtMs(word.startMs)}` });
-    setEditActions((prev) => [...prev, action]);
+    if (idx < 0) return;
+    deleteWords([idx]);
   }
 
   // ── Word click → seek + select ───────────────────────────────────────────
   // Clicking a single word seeks to it AND selects it, so Delete/Backspace
   // can delete it immediately without needing a drag selection first.
   // useCallback + waveformRef keeps this stable for memo(EditorBody).
+  const handleTextSelection = useCallback((range: SelectionRange | null) => setSelectionRange(range ? { ...range, kind: 'words' } : null), []);
+
   const handleWordClick = useCallback((attrs: { id: string; startMs: number; endMs: number; text: string }) => {
     waveformRef.current.seek(attrs.startMs);
     if (attrs.id.startsWith('p')) { setSelectionRange(null); return; } // an added pause: just go there
-    setSelectionRange({ startMs: attrs.startMs, endMs: attrs.endMs });
+    setSelectionRange({ startMs: attrs.startMs, endMs: attrs.endMs, kind: 'words', wordIndices: [Number(attrs.id.slice(1))] });
   }, []); // waveformRef and setSelectionRange are both stable
 
   // Callbacks go through a ref so they stay stable for memo(EditorBody).
@@ -1685,8 +1489,8 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
   // Pauses between kept words that no edit has touched; a change of speaker
   // counts as between sentences (detected speakers, shown or not).
   const pauseList = useMemo(
-    () => findPauses(enrichedWords, (i) => deletedWords.has(i) || fullCutWords.has(i), currentOps, (i) => speakerOfWord?.of[i] ?? null),
-    [enrichedWords, deletedWords, fullCutWords, currentOps, speakerOfWord],
+    () => findPauses(enrichedWords, (i) => fullCutWords.has(i), currentOps, (i) => speakerOfWord?.of[i] ?? null),
+    [enrichedWords, fullCutWords, currentOps, speakerOfWord],
   );
   const pauseOpsRef = useRef({ shortenLongPauses, previewShortening, addPauseAtPlayhead });
   pauseOpsRef.current = { shortenLongPauses, previewShortening, addPauseAtPlayhead };
@@ -1729,7 +1533,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
       from = to = i;
       if (!extend) {
         setWordSelection(null);
-        setSelectionRange({ startMs: words[i].startMs, endMs: words[i].endMs });
+        setSelectionRange({ startMs: words[i].startMs, endMs: words[i].endMs, kind: 'words' });
         waveformRef.current.seek(words[i].startMs);
         document.querySelector(`[data-word-id="w${i}"]`)?.scrollIntoView({ block: 'nearest' });
         return;
@@ -1744,7 +1548,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
       from = to = next;
     }
     setWordSelection(null);
-    setSelectionRange({ startMs: words[from].startMs, endMs: words[to].endMs });
+    setSelectionRange({ startMs: words[from].startMs, endMs: words[to].endMs, kind: 'words' });
     if (!extend) waveformRef.current.seek(words[from].startMs);
     document.querySelector(`[data-word-id="w${direction === 1 ? to : from}"]`)?.scrollIntoView({ block: 'nearest' });
   }
@@ -1767,7 +1571,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
     const words = enrichedWordsRef.current;
     setFind({ ...f, current: i });
     setWordSelection(null);
-    setSelectionRange({ startMs: words[m.from].startMs, endMs: words[m.to].endMs });
+    setSelectionRange({ startMs: words[m.from].startMs, endMs: words[m.to].endMs, kind: 'words' });
     waveformRef.current.seek(words[m.from].startMs);
     document.querySelector(`[data-word-id="w${m.from}"]`)?.scrollIntoView({ block: 'center' });
   }, []);
@@ -1877,26 +1681,33 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
     const indexOf: number[] = [];
     enrichedWords.forEach((w, i) => { if (!w.isSilence) indexOf.push(i); });
     const numberOf = new Map(indexOf.map((i, n) => [i, n]));
-    const cutMs = currentOps.reduce((sum, op) => sum + Math.max(0, op.endMs - op.startMs), 0);
-    const addedMs = addedPauses.reduce((sum, p) => sum + p.ms, 0);
     const durationMs = transcript?.durationMs ?? waveform.durationMs;
+    const agentWords = (): AgentWord[] => indexOf.map((i, n): AgentWord => {
+      const w = enrichedWords[i];
+      const speaker = speakerOfWord?.of[i];
+      return {
+        n, text: w.text, startMs: w.startMs, endMs: w.endMs, confidence: w.confidence,
+        speaker: speaker === null || speaker === undefined ? null : speakerOfWord!.names[speaker] ?? `Speaker ${speaker + 1}`,
+        cut: fullCutWords.has(i), partCut: partCutWords.has(i),
+        ...(w.correctedFrom !== undefined ? { correctedFrom: w.correctedFrom } : {}),
+      };
+    });
     agentApiRef.current = {
       projectId:  project.id,
       name:       projectName,
       language:   transcript?.language ?? 'unknown',
       durationMs,
-      editedMs:   Math.max(0, durationMs - cutMs + addedMs),
-      words: () => indexOf.map((i, n): AgentWord => {
-        const w = enrichedWords[i];
-        const speaker = speakerOfWord?.of[i];
-        return {
-          n, text: w.text, startMs: w.startMs, endMs: w.endMs, confidence: w.confidence,
-          speaker:  speaker === null || speaker === undefined ? null : speakerOfWord!.names[speaker] ?? `Speaker ${speaker + 1}`,
-          cut:      deletedWords.has(i) || fullCutWords.has(i),
-          partCut:  partCutWords.has(i),
-          ...(w.correctedFrom !== undefined ? { correctedFrom: w.correctedFrom } : {}),
-        };
-      }),
+      editedMs:   editPlan.durationMs,
+      words: agentWords,
+      editingState: () => inspectTransitions(editPlan, currentOps, agentWords(), adjustments, editRevision, editingReady),
+      planEdit: (ns, ranges) => {
+        const { fresh, revealed } = wordCutIntent(ns.map(n => indexOf[n]), deletedWords, fullCutWords);
+        const proposed = new Set([...deletedWords, ...fresh]);
+        const ops = computeCutOps(enrichedWords, proposed,
+          [...rangeOps, ...revealed.map(i => ({ startMs: enrichedWords[i].startMs, endMs: enrichedWords[i].endMs, id: `proposal-word:${i}` })), ...ranges.map((r, i) => ({ ...r, id: `proposal:${i}` }))], adjustments, energy, fillerCuts);
+        const plan = buildEditPlan(editPlan.sourceDurationMs, ops, addedPauses);
+        return inspectTransitions(plan, ops, agentWords(), adjustments, editRevision, editingReady);
+      },
       speakers: () => (speakerAnalysis
         ? speakerAnalysis.speakers.filter((s) => s.mergedInto === null || s.mergedInto === undefined)
           .map((s) => ({ id: s.id, name: s.name, talkMs: s.talkMs }))
@@ -1947,9 +1758,12 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
       },
       restore: (ns) => restoreWords(ns.map((n) => indexOf[n])),
       undo: (editId) => {
-        const target = editId
-          ? editActions.find((a) => a.id === editId)
-          : [...editActions].reverse().find((a) => a.group);
+        if (!editId) {
+          const before = history.current.current.current;
+          undoLast();
+          return before === history.current.current.current ? null : 'Last edit';
+        }
+        const target = editActions.find(a => a.id === editId);
         if (!target) return null;
         undoAction(target.id);
         return target.group?.label ?? target.label;
@@ -1963,11 +1777,10 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
       exportText: (format) => (format === 'txt' ? toPlainText(exportWords)
         : format === 'srt' ? toSRT(exportWords)
         : format === 'vtt' ? toVTT(exportWords)
-        : toJSON(exportWords, transcript?.language ?? 'unknown', Math.max(0, durationMs - cutMs + addedMs))),
+        : toJSON(exportWords, transcript?.language ?? 'unknown', editPlan.durationMs)),
       exportAudio: (destPath, enhanced, format) => invoke<void>('export_audio', {
         projectId: project.id,
-        ops:       currentOps.map((op) => ({ startMs: op.startMs, endMs: op.endMs })),
-        inserts:   addedPauses.map(insertOp),
+        plan:      editPlan,
         destPath,
         enhanced,
         format,
@@ -1985,13 +1798,30 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
     return registerEditor(project.id, () => agentApiRef.current!);
   }, [agentReady, project.id]);
 
+  const positionFingerprint = useMemo(() => {
+    let hash = 0;
+    for (const word of transcribedWords) hash = (Math.imul(hash, 31) + Math.round(word.startMs * 1000) + Math.round(word.endMs * 1000)) | 0;
+    return `${transcriptFingerprint}:${hash}`;
+  }, [transcriptFingerprint, transcribedWords]);
+
+  const savePosition = useEditorSession({
+    projectId: project.id, fingerprint: positionFingerprint, ready: editsReady,
+    waveform, wordSelection, selection: selectionRange, viewMode, panelHeight: waveformHeight,
+    restore: session => {
+      setViewMode(session.viewMode); setWaveformHeight(session.panelHeight);
+      waveform.setFollowing(session.following);
+      setSelectionRange(session.selection);
+      setWordSelection(session.wordSelection ? { ...session.wordSelection, indices: session.wordSelection.indices.filter(i => i < enrichedWords.length) } : null);
+    },
+  });
+
   return (
     <div className="wave-editor">
       <EditorTopBar
         project={{ ...project, name: projectName }}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
-        onBack={onBack}
+        onBack={() => { savePosition(); onBack(); }}
         onRename={(name) => { setProjectName(name); onRename?.(project.id, name); }}
         onShowShortcuts={showShortcuts}
       />
@@ -2023,21 +1853,26 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
 
       <div className="wave-editor-body">
         <EditorBody
+            selectionRange={selectionRange} selectedWordIndices={wordSelection?.indices ?? null} referenceIndices={reference?.wordIndices ?? null}
           project={project}
           viewMode={viewMode}
           onWordClick={handleWordClick}
-          onSelectionChange={setSelectionRange}
+          onSelectionChange={handleTextSelection}
           onContextMenu={handleTranscriptContextMenu}
           editActions={editActions}
           onUndoAction={undoAction}
           alignerReady={alignerReady}
           onRealign={realign}
           activeWordId={activeWordId}
+          audioState={audioState}
+          following={waveform.following && waveform.isPlaying}
+          onManualScroll={waveform.pauseFollow}
           transcript={transcript}
           loading={loading}
           error={error}
           enrichedWords={enrichedWords}
           currentOps={currentOps}
+          editPlan={editPlan}
           textTokens={textTokens}
           enhanceTool={enhanceTool}
           speakerTool={speakerTool}
@@ -2052,8 +1887,19 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
 
       <WaveformTimeline
         waveform={waveform}
+        pauses={timelinePauses}
+        onPauseMenu={(id, x, y) => openPauseMenu(id, 'timeline', x, y)}
+        canEdit={editingReady && editsReady}
         onSelectionChange={handleTimelineSelection}
         isLooping={isLooping}
+        selectionKind={selectionRange?.kind}
+        onDeleteSelection={deleteSelection}
+        onPreviewSelection={previewCurrent}
+        onJumpCut={jumpToCut}
+        onRevealSelection={() => {
+          if (!selectionRange) return;
+          showInTranscript(enrichedWords.flatMap((w, i) => w.endMs > selectionRange.startMs && w.startMs < selectionRange.endMs ? [i] : []));
+        }}
         hasSelection={selectionRange !== null}
         onLoopToggle={() => setIsLooping((v) => !v)}
         onDeleteAtMs={deleteAtMs}
@@ -2062,7 +1908,7 @@ export function EditorPage({ project, alignerReady, enhanceModels, speakerModelR
         onContextMenuAt={handleTimelineContextMenu}
         onHoverAt={handleTimelineHover}
         words={enrichedWords}
-        deletedWordIndices={deletedWords}
+        deletedWordIndices={fullCutWords}
         selectionRange={selectionRange}
         referenceRange={reference}
         snapToWords={snapToWords}

@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin, { type Region, type RegionParams } from 'wavesurfer.js/plugins/regions';
 import HoverPlugin from 'wavesurfer.js/plugins/hover';
-import { EditPlayer, type CutRange, type InsertedPause, type PlayRangeOptions } from '../lib/editPlayer';
+import { EditPlayer, type PlayRangeOptions } from '../lib/editPlayer';
+import type { TimeOp } from '../lib/cutBoundaries';
+import type { EditPlan } from '../lib/editPlan';
 import { analyzeAudio } from '../lib/audioAnalysis';
 import { activity } from '../lib/activity';
 import type { WaveformPeaks } from '../lib/waveformData';
@@ -15,6 +17,7 @@ const PLAYBACK_JOB = 'playback';
 type RegionsInstance = ReturnType<typeof RegionsPlugin.create>;
 
 export interface WaveformState {
+  following: boolean;
   isPlaying:        boolean;
   currentMs:        number;
   durationMs:       number;
@@ -37,7 +40,8 @@ export interface WaveformHandlers {
   /** The selection is being drawn or resized (fires continuously during the drag). */
   onSelectionLive?: (range: { startMs: number; endMs: number }) => void;
   /** An edge of cut `index` (into the last setCuts list) was dragged. */
-  onCutResize?: (index: number, startMs: number, endMs: number) => void;
+  onCutResize?: (cut: TimeOp, startMs: number, endMs: number) => void;
+  onSelectionCancel?: () => void;
   /** A plain click at `ms` (WaveSurfer has already moved the playhead there). */
   onClick?: (ms: number) => void;
   /** A double-click at `ms`. */
@@ -51,7 +55,7 @@ export interface WaveformHandlers {
 }
 
 const INITIAL: WaveformState = {
-  isPlaying: false, currentMs: 0, durationMs: 0, rate: 1,
+  following: true, isPlaying: false, currentMs: 0, durationMs: 0, rate: 1,
   waveLoading: false, audioReady: false, waveError: false, zoomLevel: 1, wrapperScrollLeft: 0,
 };
 
@@ -59,8 +63,6 @@ const WAVE_COLOR        = '#5a5a5a';
 const ACTIVE_WORD_COLOR = 'rgba(232, 160, 32, 0.10)';
 const SELECTION_COLOR   = 'rgba(100, 149, 237, 0.30)';
 const CUT_COLOR         = 'rgba(255, 80, 80, 0.20)';
-/** An added pause: a marker where it goes, in green as additions are. */
-const PAUSE_COLOR       = 'rgba(66, 190, 101, 0.9)';
 const REFERENCE_COLOR   = 'rgba(190, 149, 255, 0.14)';
 /** Deepest useful zoom: the drawing envelope has 1 ms resolution. */
 const MAX_PX_PER_SEC    = 1000;
@@ -76,7 +78,7 @@ export type ZoomAnchor = number | 'auto';
 
 /** The selection region: edges resizable; dragging inside it draws a new one. */
 const selectionParams = (startMs: number, endMs: number): RegionParams => ({
-  start: startMs / 1000, end: endMs / 1000, color: SELECTION_COLOR, drag: false, resize: true,
+  start: startMs / 1000, end: endMs / 1000, color: SELECTION_COLOR, drag: false, resize: true, minLength: 0.001,
 });
 
 /**
@@ -140,20 +142,22 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
   const selectionRegionRef  = useRef<Region | null>(null);
   const referenceRegionRef  = useRef<Region | null>(null);
   const cutRegionsRef       = useRef<Region[]>([]);
-  const cutsRef             = useRef<CutRange[]>([]);
-  const pauseRegionsRef     = useRef<Region[]>([]);
-  const pausesRef           = useRef<InsertedPause[]>([]);
+  const cutsRef             = useRef<TimeOp[]>([]);
+  const cutBindingsRef = useRef(new Map<Region, TimeOp>());
+  const cancelGestureRef = useRef<() => void>(() => undefined);
+  const planRef             = useRef<EditPlan | null>(null);
+  const loopRef = useRef<{ startMs: number; endMs: number } | null>(null);
   /** True while we add regions ourselves, to tell them apart from drawn ones. */
   const addingRef           = useRef(false);
   const zoomLevelRef        = useRef(1);
-  const pendingZoomRef      = useRef<{ level: number; anchor: ZoomAnchor } | null>(null);
+  const pendingZoomRef      = useRef<{ level: number; anchorMs: number; screenX: number } | null>(null);
   const zoomRafRef          = useRef<number>(0);
   /** Time under the mouse while it's over the waveform (for pointer-anchored zoom). */
   const pointerMsRef        = useRef<number | null>(null);
   /** ⌥ is held: selections aren't snapped to words. */
   const altHeldRef          = useRef(false);
   /** The view saved by a zoom-to-range, so a second press can go back to it. */
-  const zoomBackRef         = useRef<{ level: number; scroll: number; applied: { level: number; scroll: number } } | null>(null);
+  const zoomBackRef         = useRef<{ centerMs: number; spanMs: number; applied: { level: number; scroll: number } } | null>(null);
   /** Following the playhead is paused because the user scrolled away from it. */
   const followPausedRef     = useRef(false);
 
@@ -184,33 +188,28 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
     }
   }, []);
 
-  /** A marker per added pause, labelled with its length ("+0.5 s"). */
-  const renderPauseRegions = useCallback(() => {
-    pauseRegionsRef.current.forEach((r) => r.remove());
-    pauseRegionsRef.current = [];
-    pausesRef.current.forEach((p, i) => {
-      const label = document.createElement('span');
-      label.className = 'wave-pause-marker';
-      label.textContent = `+${(p.ms / 1000).toFixed(p.ms % 1000 === 0 ? 0 : p.ms % 100 === 0 ? 1 : 2)} s`;
-      const region = addRegion({ id: `pause:${i}`, start: p.atMs / 1000, color: PAUSE_COLOR, drag: false, resize: false, content: label });
-      if (region) pauseRegionsRef.current.push(region);
-    });
-  }, [addRegion]);
-
   const renderCutRegions = useCallback(() => {
     cutRegionsRef.current.forEach((r) => r.remove());
     cutRegionsRef.current = [];
-    cutsRef.current.forEach((cut, i) => {
+    cutBindingsRef.current.clear();
+    cutsRef.current.forEach((cut) => {
+      const label = cut.review ? document.createElement('span') : undefined;
+      if (label) {
+        label.textContent = 'Review transition';
+        Object.assign(label.style, { display: 'block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '10px', padding: '2px 4px', boxSizing: 'border-box' });
+        label.title = 'These words have very little space between them. Preview the join and adjust its edges if needed.';
+      }
       const region = addRegion({
-        id:        `cut:${i}`,
+        id:        `cut:${crypto.randomUUID()}`,
         start:     cut.startMs / 1000,
         end:       cut.endMs / 1000,
         color:     CUT_COLOR,
         drag:      false,
         resize:    true,
-        minLength: 0.01,
+        minLength: 0.001,
+        content: label,
       });
-      if (region) cutRegionsRef.current.push(region);
+      if (region) { cutRegionsRef.current.push(region); cutBindingsRef.current.set(region, cut); }
     });
   }, [addRegion]);
 
@@ -256,8 +255,8 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
         if (cancelled || !containerRef.current) return;
 
         player = new EditPlayer(ctx, buffer, durationSec);
-        player.setCuts(cutsRef.current);
-        player.setInserts(pausesRef.current);
+        if (planRef.current) player.setPlan(planRef.current);
+        player.setLoop(loopRef.current);
         const regions = RegionsPlugin.create();
         ws = WaveSurfer.create({
           container:     containerRef.current,
@@ -299,8 +298,7 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
 
         const basePxPerSec = () => (containerRef.current?.clientWidth ?? 1) / durationSec;
         ws.on('play',   () => {
-          followPausedRef.current = false;
-          if (wsRef.current) setFollow(wsRef.current, true);
+          if (wsRef.current) setFollow(wsRef.current, !followPausedRef.current);
           setState((s) => ({ ...s, isPlaying: true }));
         });
         ws.on('pause',  () => setState((s) => ({ ...s, isPlaying: false })));
@@ -316,14 +314,31 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
 
         // Resizing the selection's or a cut's edge (the Regions plugin's handles).
         const rangeOf = (region: Region) => ({ startMs: region.start * 1000, endMs: region.end * 1000 });
-        regions.on('region-update', (region) => {
-          if (region === selectionRegionRef.current) handlers.current.onSelectionLive?.(rangeOf(region));
+        let resize: { region: Region; startMs: number; endMs: number; cancelled: boolean } | null = null;
+        regions.on('region-update', region => {
+          if (resize?.region === region && resize.cancelled) {
+            region.setOptions({ start: resize.startMs / 1000, end: resize.endMs / 1000 });
+            return;
+          }
+          if (region === selectionRegionRef.current || cutBindingsRef.current.has(region)) handlers.current.onSelectionLive?.(rangeOf(region));
         });
-        regions.on('region-updated', (region) => {
-          if (region === selectionRegionRef.current) {
-            handlers.current.onSelectionChange?.(rangeOf(region), altHeldRef.current);
-          } else if (region.id.startsWith('cut:')) {
-            handlers.current.onCutResize?.(Number(region.id.slice(4)), region.start * 1000, region.end * 1000);
+        regions.on('region-updated', region => {
+          const transaction = resize;
+          resize = null;
+          if (!transaction || transaction.region !== region) return;
+          if (transaction.cancelled) {
+            region.setOptions({ start: transaction.startMs / 1000, end: transaction.endMs / 1000 });
+            handlers.current.onSelectionCancel?.(); return;
+          }
+          if (region === selectionRegionRef.current) handlers.current.onSelectionChange?.(rangeOf(region), altHeldRef.current);
+          else {
+            const cut = cutBindingsRef.current.get(region);
+            if (cut) {
+              handlers.current.onCutResize?.(cut, region.start * 1000, region.end * 1000);
+              // The committed state redraws this region. Rejected/no-op edits
+              // must also return to their exact saved boundaries.
+              region.setOptions({ start: cut.startMs / 1000, end: cut.endMs / 1000 });
+            }
           }
         });
 
@@ -357,36 +372,43 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
         // millisecond at any zoom; a press that barely moves is a click (seek).
         const durationMs = durationSec * 1000;
         const clampMs = (ms: number) => Math.max(0, Math.min(durationMs, ms));
-        let drag: { pointerId: number; downX: number; anchorMs: number; startMs: number; endMs: number; active: boolean } | null = null;
+        let drag: { pointerId: number; downX: number; anchorMs: number; startMs: number; endMs: number; active: boolean; x: number; previous: { startMs: number; endMs: number } | null } | null = null;
+        let edgeRaf = 0;
         let swallowClick = false;
 
-        const onDragMove = (e: PointerEvent) => {
-          if (!drag || e.pointerId !== drag.pointerId) return;
-          if (!drag.active) {
-            if (Math.abs(e.clientX - drag.downX) <= DRAG_THRESHOLD_PX) return;
-            drag.active = true;
-          }
-          e.preventDefault();
+        const updateDrag = () => {
+          if (!drag?.active) return;
           const rect = container.getBoundingClientRect();
-          if (ws && e.clientX > rect.right - EDGE_SCROLL_PX) {
-            ws.setScroll(ws.getScroll() + (e.clientX - (rect.right - EDGE_SCROLL_PX)));
-          } else if (ws && e.clientX < rect.left + EDGE_SCROLL_PX) {
-            ws.setScroll(Math.max(0, ws.getScroll() - (rect.left + EDGE_SCROLL_PX - e.clientX)));
-          }
-          const ms = clampMs(msAt(e.clientX));
-          drag.startMs = Math.min(drag.anchorMs, ms);
-          drag.endMs   = Math.max(drag.anchorMs, ms);
+          if (ws && drag.x > rect.right - EDGE_SCROLL_PX) ws.setScroll(ws.getScroll() + Math.min(32, drag.x - rect.right + EDGE_SCROLL_PX));
+          else if (ws && drag.x < rect.left + EDGE_SCROLL_PX) ws.setScroll(Math.max(0, ws.getScroll() - Math.min(32, rect.left + EDGE_SCROLL_PX - drag.x)));
+          const ms = clampMs(msAt(drag.x));
+          drag.startMs = Math.min(drag.anchorMs, ms); drag.endMs = Math.max(drag.anchorMs, ms);
           const existing = selectionRegionRef.current;
           if (existing) existing.setOptions({ start: drag.startMs / 1000, end: drag.endMs / 1000 });
           else selectionRegionRef.current = addRegion(selectionParams(drag.startMs, drag.endMs));
           handlers.current.onSelectionLive?.({ startMs: drag.startMs, endMs: drag.endMs });
         };
+        const edgeTick = () => { updateDrag(); if (drag?.active) edgeRaf = requestAnimationFrame(edgeTick); };
+        const onDragMove = (e: PointerEvent) => {
+          if (!drag || e.pointerId !== drag.pointerId) return;
+          drag.x = e.clientX;
+          if (!drag.active) {
+            if (Math.abs(e.clientX - drag.downX) <= DRAG_THRESHOLD_PX) return;
+            drag.active = true; edgeRaf = requestAnimationFrame(edgeTick);
+          }
+          e.preventDefault(); updateDrag();
+        };
         const onDragEnd = (e: PointerEvent) => {
           if (!drag || e.pointerId !== drag.pointerId) return;
           window.removeEventListener('pointermove', onDragMove);
           window.removeEventListener('pointerup', onDragEnd);
-          window.removeEventListener('pointercancel', onDragEnd);
+          window.removeEventListener('pointercancel', onDragCancel);
+          cancelAnimationFrame(edgeRaf);
           const done = drag;
+          if (done.active && done.endMs - done.startMs < 1) {
+            cancelGesture(); swallowClick = true;
+            setTimeout(() => { swallowClick = false; }, 0); return;
+          }
           drag = null;
           if (!done.active) return;
           // The click that ends a drag isn't a seek.
@@ -394,18 +416,55 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
           setTimeout(() => { swallowClick = false; }, 0);
           handlers.current.onSelectionChange?.({ startMs: done.startMs, endMs: done.endMs }, altHeldRef.current);
         };
+        const cancelGesture = () => {
+          cancelAnimationFrame(edgeRaf);
+          if (drag) {
+            const previous = drag.previous;
+            if (previous && selectionRegionRef.current) selectionRegionRef.current.setOptions({ start: previous.startMs / 1000, end: previous.endMs / 1000 });
+            else { selectionRegionRef.current?.remove(); selectionRegionRef.current = null; }
+            drag = null;
+            window.removeEventListener('pointermove', onDragMove);
+            window.removeEventListener('pointerup', onDragEnd);
+            window.removeEventListener('pointercancel', onDragCancel);
+          }
+          if (resize) {
+            resize.cancelled = true;
+            resize.region.setOptions({ start: resize.startMs / 1000, end: resize.endMs / 1000 });
+          }
+          handlers.current.onSelectionCancel?.();
+        };
+        cancelGestureRef.current = cancelGesture;
+        const onDragCancel = () => cancelGesture();
+        const onGestureKey = (e: KeyboardEvent) => {
+          if (e.key === 'Escape' && (drag?.active || resize)) { e.preventDefault(); e.stopImmediatePropagation(); cancelGesture(); }
+        };
+        window.addEventListener('keydown', onGestureKey, true);
+        window.addEventListener('blur', cancelGesture);
+        window.addEventListener('pointercancel', onDragCancel, true);
+        let resizeEndTimer: ReturnType<typeof setTimeout> | undefined;
+        const finishResize = () => {
+          const finished = resize;
+          resizeEndTimer = setTimeout(() => { if (resize === finished) resize = null; }, 0);
+        };
+        window.addEventListener('pointerup', finishResize);
         const onPointerDown = (e: PointerEvent) => {
+          clearTimeout(resizeEndTimer);
           if (e.button !== 0 || handlers.current.canSelect?.() === false) return;
           // Pressing a region's edge resizes that region instead.
           const onHandle = e.composedPath().some((el) =>
             el instanceof Element && (el.getAttribute('part') ?? '').includes('region-handle'));
-          if (onHandle) return;
+          if (onHandle) {
+            const path = e.composedPath();
+            const region = regions.getRegions().find(r => r.element !== null && path.includes(r.element));
+            if (region) resize = { region, ...rangeOf(region), cancelled: false };
+            return;
+          }
           window.getSelection()?.removeAllRanges();
           const anchorMs = clampMs(msAt(e.clientX));
-          drag = { pointerId: e.pointerId, downX: e.clientX, anchorMs, startMs: anchorMs, endMs: anchorMs, active: false };
+          drag = { pointerId: e.pointerId, downX: e.clientX, anchorMs, startMs: anchorMs, endMs: anchorMs, active: false, x: e.clientX, previous: selectionRegionRef.current ? rangeOf(selectionRegionRef.current) : null };
           window.addEventListener('pointermove', onDragMove);
           window.addEventListener('pointerup', onDragEnd);
-          window.addEventListener('pointercancel', onDragEnd);
+          window.addEventListener('pointercancel', onDragCancel);
         };
         // Keep a press on the waveform from starting the browser's text selection.
         const onMouseDown = (e: MouseEvent) => { if (e.button === 0) e.preventDefault(); };
@@ -432,11 +491,17 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
           container.removeEventListener('click', onClickCapture, true);
           window.removeEventListener('pointermove', onDragMove);
           window.removeEventListener('pointerup', onDragEnd);
-          window.removeEventListener('pointercancel', onDragEnd);
+          window.removeEventListener('pointercancel', onDragCancel);
+          window.removeEventListener('pointercancel', onDragCancel, true);
+          window.removeEventListener('keydown', onGestureKey, true);
+          window.removeEventListener('blur', cancelGesture);
+          window.removeEventListener('pointerup', finishResize);
+          clearTimeout(resizeEndTimer);
+          cancelAnimationFrame(edgeRaf);
+          cancelGestureRef.current = () => undefined;
         };
 
         renderCutRegions();
-        renderPauseRegions();
         mainRef.current  = { buffer, envelope: analysis.envelope, duration: durationSec };
         shownRef.current = buffer;
         setMainVersion((v) => v + 1);
@@ -468,13 +533,13 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
       cancelled = true;
       activity.dismiss(PLAYBACK_JOB);
       cancelAnimationFrame(zoomRafRef.current);
+      zoomRafRef.current = 0; pendingZoomRef.current = null;
       detachPointer();
       pointerMsRef.current        = null;
       activeWordRegionRef.current = null;
       selectionRegionRef.current  = null;
       referenceRegionRef.current  = null;
       cutRegionsRef.current       = [];
-      pauseRegionsRef.current     = [];
       ws?.destroy();
       player?.destroy();
       ctx.close().catch(() => undefined);
@@ -532,18 +597,8 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
       const ws = wsRef.current;
       if (ws) {
         const ms = ws.getCurrentTime() * 1000;
-        setState((s) => (Math.abs(ms - s.currentMs) > 1 ? { ...s, currentMs: ms } : s));
-        // Following was paused by a manual scroll: resume once the playhead
-        // is back in view, so the page-turns pick up from there.
-        if (followPausedRef.current && ws.isPlaying()) {
-          const width = containerRef.current?.clientWidth ?? 0;
-          const pxPerSec = Math.max(width / Math.max(ws.getDuration(), 1e-3), ws.options.minPxPerSec || 0);
-          const x = (ms / 1000) * pxPerSec - ws.getScroll();
-          if (x >= 0 && x <= width) {
-            followPausedRef.current = false;
-            setFollow(ws, true);
-          }
-        }
+        setState((s) => (Math.abs(ms - s.currentMs) >= 0.001 ? { ...s, currentMs: ms } : s));
+
       }
       rafRef.current = requestAnimationFrame(tick);
     }
@@ -567,12 +622,18 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
     };
   }, []);
 
-  /** Stop following the playhead until it's back in view (or playback restarts). */
+  /** Manual navigation pauses following until the user turns Follow on. */
   const pauseFollow = useCallback(() => {
     const ws = wsRef.current;
-    if (!ws || !ws.isPlaying()) return;
     followPausedRef.current = true;
-    setFollow(ws, false);
+    if (ws) setFollow(ws, false);
+    setState(s => s.following ? { ...s, following: false } : s);
+  }, []);
+
+  const setFollowing = useCallback((on: boolean) => {
+    followPausedRef.current = !on;
+    if (wsRef.current) setFollow(wsRef.current, on);
+    setState(s => ({ ...s, following: on }));
   }, []);
 
   // ── Transport ──────────────────────────────────────────────────────────────
@@ -598,8 +659,8 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
     const ws = wsRef.current;
     const width = containerRef.current?.clientWidth ?? 0;
     const dur = ws?.getDuration() ?? 0;
-    if (!ws || dur <= 0 || width <= 0) return 32;
-    return Math.max(32, Math.ceil((MAX_PX_PER_SEC * dur) / width));
+    if (!ws || dur <= 0 || width <= 0) return 1;
+    return Math.max(1, (MAX_PX_PER_SEC * dur) / width);
   }, []);
 
   /** The visible window (ms) and the current scale, or null before load. */
@@ -643,30 +704,30 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
    * frame redraws the canvas.
    */
   const setZoom = useCallback((level: number, anchor: ZoomAnchor = 'auto') => {
+    const view = getView();
+    if (!view || !Number.isFinite(level)) return;
     const clamped = Math.max(1, Math.min(getMaxZoom(), level));
+    const previous = pendingZoomRef.current;
+    const anchorMs = previous?.anchorMs ?? resolveAnchor(anchor, view);
+    pendingZoomRef.current = { level: clamped, anchorMs, screenX: previous?.screenX ?? (anchorMs / 1000) * view.pxPerSec - view.scroll };
     zoomLevelRef.current = clamped;
-    setState((s) => ({ ...s, zoomLevel: clamped }));
-    pendingZoomRef.current = {
-      level:  clamped,
-      anchor: anchor !== 'auto' ? anchor : (pendingZoomRef.current?.anchor ?? 'auto'),
-    };
-
-    cancelAnimationFrame(zoomRafRef.current);
+    if (zoomRafRef.current) return;
     zoomRafRef.current = requestAnimationFrame(() => {
+      zoomRafRef.current = 0;
       const pending = pendingZoomRef.current;
-      const ws      = wsRef.current;
-      const view    = getView();
+      const ws = wsRef.current;
+      const current = getView();
       pendingZoomRef.current = null;
-      if (!pending || !ws || !view) return;
-
-      const anchorMs = resolveAnchor(pending.anchor, view);
-      const screenX  = (anchorMs / 1000) * view.pxPerSec - view.scroll;
-      const newPx    = (view.width / view.dur) * pending.level;
-      pauseFollow(); // resumes by itself if the playhead stays in view
-      ws.zoom(newPx);
-      ws.setScroll(Math.max(0, (anchorMs / 1000) * newPx - screenX));
+      if (!pending || !ws || !current) return;
+      const newPx = (current.width / current.dur) * pending.level;
+      pauseFollow(); ws.zoom(newPx);
+      ws.setScroll(Math.max(0, (pending.anchorMs / 1000) * newPx - pending.screenX));
     });
   }, [getMaxZoom, getView, pauseFollow, resolveAnchor]);
+
+  const zoomBy = useCallback((factor: number, anchor: ZoomAnchor = 'auto') => {
+    setZoom(zoomLevelRef.current * factor, anchor);
+  }, [setZoom]);
 
   /** Set the zoom level and scroll position at once (immediate, no anchor). */
   const applyView = useCallback((level: number, scroll: number) => {
@@ -674,6 +735,7 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
     const view = getView();
     if (!ws || !view) return;
     cancelAnimationFrame(zoomRafRef.current);
+    zoomRafRef.current = 0;
     pendingZoomRef.current = null;
     pauseFollow();
     const clamped = Math.max(1, Math.min(getMaxZoom(), level));
@@ -706,13 +768,35 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
         && Math.abs(zoomLevelRef.current - back.applied.level) < 0.01
         && Math.abs(view.scroll - back.applied.scroll) < 2) {
       zoomBackRef.current = null;
-      applyView(back.level, back.scroll);
+      showWindow(back.centerMs, back.spanMs);
       return;
     }
-    const saved = { level: zoomLevelRef.current, scroll: view.scroll };
+    const saved = { centerMs: (view.startMs + view.endMs) / 2, spanMs: view.endMs - view.startMs };
     showWindow((startMs + endMs) / 2, (endMs - startMs) / 0.8);
     zoomBackRef.current = { ...saved, applied: { level: zoomLevelRef.current, scroll: ws.getScroll() } };
   }, [applyView, getView, showWindow]);
+
+  // Preserve the visible time window when the application width changes.
+  useEffect(() => {
+    const el = containerRef.current, ws = wsRef.current;
+    if (!el || !ws) return;
+    let previous = getView();
+    const remember = () => {
+      const view = getView();
+      if (view && (!previous || view.width === previous.width)) previous = view;
+    };
+    const offScroll = ws.on('scroll', remember), offZoom = ws.on('zoom', remember);
+    const observer = new ResizeObserver(() => {
+      const view = getView();
+      if (view && previous && view.width !== previous.width) {
+        const old = previous; previous = view;
+        showWindow((old.startMs + old.endMs) / 2, old.endMs - old.startMs);
+      }
+      previous = getView();
+    });
+    observer.observe(el);
+    return () => { observer.disconnect(); offScroll(); offZoom(); };
+  }, [mainVersion, getView, showWindow]);
 
   /**
    * Bring [startMs, endMs] into view without losing your place more than
@@ -804,23 +888,23 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
   }, []);
 
   /** Play [startMs, endMs] once and stop there (see PlayRangeOptions). */
+  const setLoop = useCallback((range: { startMs: number; endMs: number } | null) => { loopRef.current = range; playerRef.current?.setLoop(range); }, []);
+
   const playRange = useCallback((startMs: number, endMs: number, options?: PlayRangeOptions) => {
     void playerRef.current?.playRange(startMs / 1000, endMs / 1000, options);
   }, []);
 
   /** Cut ranges for playback (skipped, crossfaded) and display (draggable edges). */
-  const setCuts = useCallback((cuts: CutRange[]) => {
+  const setCuts = useCallback((cuts: TimeOp[]) => {
+    cancelGestureRef.current();
     cutsRef.current = cuts;
-    playerRef.current?.setCuts(cuts);
     renderCutRegions();
   }, [renderCutRegions]);
 
-  /** Added pauses for playback (room tone) and display (markers). */
-  const setInserts = useCallback((pauses: InsertedPause[]) => {
-    pausesRef.current = pauses;
-    playerRef.current?.setInserts(pauses);
-    renderPauseRegions();
-  }, [renderPauseRegions]);
+  const setEditPlan = useCallback((plan: EditPlan) => {
+    planRef.current = plan;
+    playerRef.current?.setPlan(plan);
+  }, []);
 
   return {
     containerRef,
@@ -829,12 +913,12 @@ export function useWaveform(audioSrc: string | null, { peaks = null, altSrc = nu
     /** `altSrc` is decoded and can be switched to instantly. */
     altReady,
     handlers,
-    play, pause, toggle, seek, setRate, playRange,
-    setZoom, getMaxZoom, getWsScroll, setWsScroll, forceRedraw,
-    getView, zoomToRange, revealRange,
+    play, pause, toggle, seek, setRate, playRange, setLoop,
+    setZoom, zoomBy, pauseFollow, setFollowing, getMaxZoom, getWsScroll, setWsScroll, forceRedraw,
+    getView, zoomToRange, revealRange, showWindow,
     setActiveWordRegion, clearActiveWordRegion,
     setSelectionRegion, clearSelectionRegion,
     setReferenceRegion, clearReferenceRegion,
-    setCuts, setInserts,
+    setCuts, setEditPlan,
   };
 }

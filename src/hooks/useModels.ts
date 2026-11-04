@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
-  ALIGNER_MODEL_ID, DPDFNET_MODEL_ID, SPEAKER_MODEL_ID, TRANSCRIPTION_BUNDLE,
+  ALIGNER_MODEL_ID, DPDFNET_MODEL_ID, SPEAKER_MODEL_ID, readyTranscriptionModels,
   type ModelBundle,
 } from '../lib/modelCatalog';
 
@@ -231,9 +231,9 @@ export function useModels() {
     return () => unlisteners.forEach((fn) => fn());
   }, [refresh, startNextBundlePart, endBundleRunOf]);
 
-  // Projects need the whole Transcription bundle: Whisper *and* the aligner.
+  // Either Parakeet on its own, or Whisper with its word aligner.
   const isReady = (id: string) => models.some((m) => m.id === id && m.status.type === 'ready');
-  const hasReadyModel = TRANSCRIPTION_BUNDLE.parts.every((p) => isReady(p.modelId));
+  const hasReadyModel = readyTranscriptionModels(models).length > 0;
   const alignerReady     = isReady(ALIGNER_MODEL_ID);
   const speakerModelReady = isReady(SPEAKER_MODEL_ID);
   /** Which speech-enhancement models are downloaded: the clean-up, DPDFNet. */

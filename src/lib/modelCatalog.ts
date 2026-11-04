@@ -1,4 +1,4 @@
-// Frontend-only metadata for all known Whisper models.
+// Frontend metadata for Wave's local models.
 // The Rust side only knows ids and filenames — rich display info lives here.
 
 export interface ModelCatalogEntry {
@@ -23,22 +23,34 @@ export interface ModelCatalogEntry {
   };
 }
 
-// Wave ships one transcription model — Large v3 Turbo — plus a word-alignment
-// model. Text-based editing needs accurate words *and* accurate word timings:
-// Turbo gives near-Large-v3 accuracy at a fraction of the time, and the aligner
-// places each word on its audio. Keep in sync with KNOWN_MODELS in
-// src-tauri/src/models.rs. Enhancement models are optional tools.
+// Keep in sync with KNOWN_MODELS in src-tauri/src/models.rs. Whisper uses a
+// separate aligner; Parakeet returns native word timings.
 export const MODEL_CATALOG: ModelCatalogEntry[] = [
   {
     id: 'large-v3-turbo',
     kind: 'transcription',
-    name: 'Large Turbo',
+    name: 'Whisper Large v3 Turbo',
     language: 'Multilingual',
     sizeMb: 1549,
     description:
       'Distilled from Whisper Large v3 — near-identical accuracy at a fraction of the time. Wave aligns every word to the audio, so cuts land where the words actually are. Handles accents, technical vocabulary and multiple languages.',
     bestFor: 'Podcasts, interviews and narration — precise text-based editing',
     requirements: 'Apple Silicon (M1 or later)',
+  },
+  {
+    id: 'parakeet-tdt-0.6b-v3',
+    kind: 'transcription',
+    name: 'Parakeet v3',
+    language: 'Multilingual',
+    sizeMb: 713975456 / (1024 * 1024),
+    description: 'Fast local transcription with built-in word timing. Supports English and 24 other European languages; does not support Arabic. Try it alongside Whisper to compare results on your recordings.',
+    bestFor: 'English and European-language podcasts and interviews',
+    requirements: 'Apple Silicon (M1 or later) · runs entirely on your Mac',
+    provider: {
+      name: 'NVIDIA', url: 'https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3',
+      model: 'Parakeet TDT 0.6B v3', licenseName: 'CC BY 4.0',
+      licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
+    },
   },
   {
     id: 'wav2vec2-align-en',
@@ -100,6 +112,19 @@ export function isTranscriptionModel(id: string): boolean {
 
 /** Id of the forced-alignment model (mirrors ALIGNER_ID in models.rs). */
 export const ALIGNER_MODEL_ID = 'wav2vec2-align-en';
+export const PARAKEET_MODEL_ID = 'parakeet-tdt-0.6b-v3';
+
+/** Word timing is included in Parakeet; Whisper needs its alignment download. */
+export function isTranscriptionReady(models: readonly { id: string; status: { type: string } }[], id: string | null): boolean {
+  const ready = (modelId: string) => models.some(m => m.id === modelId && m.status.type === 'ready');
+  if (id === PARAKEET_MODEL_ID) return ready(id);
+  return id === 'large-v3-turbo' && ready(id) && ready(ALIGNER_MODEL_ID);
+}
+
+/** Keep Whisper first when choosing a default; adding a model never changes a saved choice. */
+export function readyTranscriptionModels(models: readonly { id: string; status: { type: string } }[]): ModelCatalogEntry[] {
+  return MODEL_CATALOG.filter(m => m.kind === 'transcription' && isTranscriptionReady(models, m.id));
+}
 
 // ─── Bundles ──────────────────────────────────────────────────────────────────
 // Models that only make sense together are one entry in Settings: downloaded
@@ -124,7 +149,7 @@ export interface ModelBundle {
  */
 export const TRANSCRIPTION_BUNDLE: ModelBundle = {
   id:       'transcription',
-  name:     'Transcription',
+  name:     'Whisper',
   description:
     'Two models that work as one. Whisper writes down what was said; a small alignment model then finds exactly where each word was spoken, to within a few hundredths of a second, so cutting a word removes all of it and none of its neighbours.',
   bestFor:      'Podcasts, interviews and narration: precise text-based editing',

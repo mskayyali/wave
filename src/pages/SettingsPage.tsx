@@ -1,6 +1,6 @@
 // IconIndicator is Carbon's status indicator; this release ships it as a preview.
 import {
-  Button, ContainedList, ContainedListItem, IconButton, InlineLoading, InlineNotification, ProgressBar, Stack,
+  Button, ContainedList, ContainedListItem, IconButton, InlineLoading, InlineNotification, ProgressBar, Stack, Select, SelectItem,
   preview__IconIndicator as IconIndicator,
 } from '@carbon/react';
 import { Download, Renew, StopFilled, TrashCan } from '@carbon/icons-react';
@@ -8,6 +8,7 @@ import {
   DPDFNET_MODEL_ID,
   SPEAKER_MODEL_ID,
   TRANSCRIPTION_BUNDLE,
+  MODEL_CATALOG, PARAKEET_MODEL_ID, isTranscriptionReady,
   formatBytes,
   formatEta,
   formatSpeed,
@@ -40,7 +41,7 @@ interface Entry {
 
 /** The one-line summaries, by entry id (bundle or model). */
 const SUMMARIES: Record<string, string> = {
-  transcription:           'Writes down what was said and places every word on its audio. Wave needs it to edit.',
+  transcription:           'Broad language support, including Arabic. Includes a separate word aligner for precise English edits.',
   dpdfnet:                 'Removes background noise and room echo, keeping the voice as recorded.',
   'nemotron3-diarization': 'Works out who is speaking when, for up to 8 people, and names them in the transcript.',
 };
@@ -147,6 +148,8 @@ function ModelRow({ entry, models, progress, errors, onDownload, onCancel, onDel
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 interface SettingsPageProps {
+  selectedModelId: string | null;
+  onSelectModel: (id: string) => void;
   models:           ModelInfo[];
   progress:         Record<string, DownloadProgress>;
   errors:           Record<string, string>;
@@ -162,6 +165,7 @@ interface SettingsPageProps {
 }
 
 export function SettingsPage({
+  selectedModelId, onSelectModel,
   models, progress, errors, loading,
   onDownload, onCancel, onDelete, onRetry,
   onDownloadBundle, onCancelBundle, onDeleteBundle, onRetryBundle,
@@ -211,10 +215,22 @@ export function SettingsPage({
             <header className="wave-settings-section__header">
               <h2 className="wave-settings-section__title">Models</h2>
               <p className="wave-settings-section__desc">
-                Transcription is required. The rest are optional, and each runs only when you start it from the editor&apos;s Tools.
+                Choose a transcription model for new recordings. Other models run when you start them from the editor&apos;s Tools.
               </p>
             </header>
-            <ContainedList label="Required" kind="on-page" className="wave-model-group">{bundleRow(TRANSCRIPTION_BUNDLE)}</ContainedList>
+            <Select id="transcription-model" labelText="Transcription model" value={selectedModelId ?? ''}
+              helperText="Download a model below to select it. Changing this does not alter existing transcripts or edits."
+              onChange={event => onSelectModel(event.target.value)}>
+              {!selectedModelId && <SelectItem value="" text="Download a model to get started" disabled />}
+              {MODEL_CATALOG.filter(m => m.kind === 'transcription').map(m => {
+                const ready = isTranscriptionReady(models, m.id);
+                return <SelectItem key={m.id} value={m.id} text={`${m.name}${ready ? '' : ' — download first'}`} disabled={!ready} />;
+              })}
+            </Select>
+            <ContainedList label="Transcription" kind="on-page" className="wave-model-group">
+              {bundleRow(TRANSCRIPTION_BUNDLE)}
+              {modelRow(PARAKEET_MODEL_ID)}
+            </ContainedList>
             <ContainedList label="Sound" kind="on-page" className="wave-model-group">
               {modelRow(DPDFNET_MODEL_ID)}
             </ContainedList>

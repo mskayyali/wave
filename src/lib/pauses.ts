@@ -103,25 +103,3 @@ export function findRoomTone(energy: Float32Array | null, words: EnrichedWord[],
   }
   return undefined;
 }
-
-/**
- * Where a moment of the original lands in the edited audio: minus what's cut
- * before it, plus the pauses added before it. A pause added exactly at a word's
- * start moves the word; one at its end doesn't stretch it (`edge`).
- */
-export function editedTime(
-  ms:      number,
-  cuts:    { startMs: number; endMs: number }[],
-  pauses:  { atMs: number; ms: number }[],
-  edge:    'start' | 'end',
-): number {
-  let t = ms;
-  for (const c of cuts) {
-    if (c.startMs >= ms) break;
-    t -= Math.min(c.endMs, ms) - c.startMs;
-  }
-  for (const p of pauses) {
-    if (edge === 'start' ? p.atMs <= ms : p.atMs < ms) t += p.ms;
-  }
-  return Math.max(0, t);
-}

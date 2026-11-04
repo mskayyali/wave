@@ -18,7 +18,7 @@ import { useSettings } from './hooks/useSettings';
 import { useActivityEvents } from './hooks/useActivity';
 import { useAgentBridge } from './hooks/useAgent';
 import type { Project } from './hooks/useProjects';
-import { isTranscriptionModel, type ModelBundle } from './lib/modelCatalog';
+import { isTranscriptionReady, readyTranscriptionModels, type ModelBundle } from './lib/modelCatalog';
 
 type Page = 'projects' | 'settings';
 
@@ -105,11 +105,11 @@ function App() {
   // transcription with "model file not found").
   useEffect(() => {
     if (settingsLoading || modelsLoading) return;
-    const transcribers = models.filter((m) => isTranscriptionModel(m.id));
+    const transcribers = readyTranscriptionModels(models);
     const current = settings.selectedModelId;
     const known   = transcribers.some((m) => m.id === current);
     if (current && known) return;
-    const firstReady = transcribers.find((m) => m.status.type === 'ready');
+    const firstReady = transcribers[0];
     const next = firstReady?.id ?? null;
     if (next !== current) {
       setSelectedModel(next);
@@ -184,7 +184,7 @@ function App() {
 
   useEffect(() => {
     const { selectedModelId } = settings;
-    if (!selectedModelId) return;
+    if (!isTranscriptionReady(models, selectedModelId) || !selectedModelId) return;
 
     for (const project of projects) {
       if (
@@ -195,7 +195,7 @@ function App() {
         transcribeProject(project.id, selectedModelId);
       }
     }
-  }, [projects, settings, transcribeProject]);
+  }, [projects, settings, models, transcribeProject]);
 
   // Deleting the Transcription bundle removes the selected transcriber too.
   async function handleDeleteBundle(bundle: ModelBundle) {
@@ -268,6 +268,8 @@ function App() {
                 progress={modelProgress}
                 errors={modelErrors}
                 loading={modelsLoading}
+                selectedModelId={settings.selectedModelId}
+                onSelectModel={setSelectedModel}
                 onDownload={downloadModel}
                 onCancel={cancelDownload}
                 onDelete={handleDeleteModel}

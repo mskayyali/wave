@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { agentName } from '../lib/agent';
+import { agentName, serializeAgentCalls } from '../lib/agent';
 import { runTool, type AgentContext } from '../lib/agentTools';
 
 // AI agents: answers the tool calls `wave mcp` passes through the app
@@ -20,16 +20,19 @@ export function useAgentBridge(context: Omit<AgentContext, 'agent'>) {
   contextRef.current = context;
 
   useEffect(() => {
-    const unlisten = listen<Request>('agent:request', async ({ payload }) => {
-      let ok = true;
-      let text: string;
-      try {
-        text = await runTool(payload.tool, payload.arguments ?? {}, { ...contextRef.current, agent: agentName(payload.client) });
-      } catch (e) {
-        ok = false;
-        text = e instanceof Error ? e.message : String(e);
-      }
-      invoke('agent_reply', { id: payload.id, ok, text }).catch((e) => console.warn('Could not answer the agent:', e));
+    const enqueue = serializeAgentCalls();
+    const unlisten = listen<Request>('agent:request', ({ payload }) => {
+      void enqueue(async () => {
+        let ok = true;
+        let text: string;
+        try {
+          text = await runTool(payload.tool, payload.arguments ?? {}, { ...contextRef.current, agent: agentName(payload.client) });
+        } catch (e) {
+          ok = false;
+          text = e instanceof Error ? e.message : String(e);
+        }
+        await invoke('agent_reply', { id: payload.id, ok, text }).catch((e) => console.warn('Could not answer the agent:', e));
+      }).catch((e) => console.warn('Could not process the agent request:', e));
     });
     return () => { void unlisten.then((fn) => fn()); };
   }, []);

@@ -18,6 +18,7 @@ export interface EnrichedWord extends TranscriptWord {
 }
 
 export interface Transcript {
+  modelId?: string;
   words:      TranscriptWord[];
   language:   string;
   durationMs: number;

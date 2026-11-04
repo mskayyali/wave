@@ -2,6 +2,7 @@ import type { EditAction } from '../pages/EditorPage';
 import type { EnhanceModelsReady, EnhanceOptions } from '../hooks/useEnhancement';
 import type { Rhythm } from './pauses';
 import type { ExportSettings } from './audioFormats';
+import type { AgentEditSnapshot } from './agentTransitions';
 
 // AI agents: what the editor lets them see and do. A tool call reaches the
 // frontend as an `agent:request` (hooks/useAgent.ts), runTool (agentTools.ts)
@@ -75,6 +76,10 @@ export interface EditorAgentApi {
   /** The cut ranges, as playback skips them. */
   cuts():     { startMs: number; endMs: number }[];
   edits():    EditAction[];
+  /** Resolved joins, output timing and review flags, using the export plan. */
+  editingState(): AgentEditSnapshot;
+  /** Plan prospective cuts without changing audio, history, selection or playback. */
+  planEdit(words: number[], ranges: { startMs: number; endMs: number }[]): AgentEditSnapshot;
   enhancement(): AgentEnhancement;
   /** Run speech enhancement (clean-up, EQ, loudness) with these options; starts and returns. */
   enhance(options: EnhanceOptions): void;
@@ -144,4 +149,16 @@ export function agentName(client: string | null | undefined): string {
   if (c.includes('chatgpt') || c.includes('openai')) return 'ChatGPT';
   if (c.includes('cursor'))  return 'Cursor';
   return client?.trim() || 'AI agent';
+}
+
+
+/** Requests from different MCP clients must observe settled edits in order.
+ * A failed call rejects its own result without poisoning later requests. */
+export function serializeAgentCalls() {
+  let tail = Promise.resolve();
+  return <T>(run: () => Promise<T>): Promise<T> => {
+    const result = tail.then(run);
+    tail = result.then(() => undefined, () => undefined);
+    return result;
+  };
 }

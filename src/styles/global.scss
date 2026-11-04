@@ -1480,7 +1480,9 @@ body.wave-fullscreen {
   align-items: center;
   gap: 2px;
   padding: 0 8px;
-  height: 28px;
+  height: 32px;
+  min-height: 32px;
+  flex-wrap: nowrap;
   flex-shrink: 0;
   border-bottom: 1px solid #1a1a1a;
   background: #080808;
@@ -1615,6 +1617,13 @@ body.wave-fullscreen {
 }
 
 .wave-selection-readout__len {
+  // Reserve space across digit and unit changes while dragging.
+  box-sizing: content-box;
+  flex: 0 0 10ch;
+  width: 10ch;
+  text-align: right;
+  font-family: 'IBM Plex Mono', monospace;
+  font-variant-numeric: tabular-nums;
   padding: 1px 5px;
   border-radius: 2px;
   background: rgba(100, 149, 237, 0.16);
@@ -1995,6 +2004,12 @@ body.wave-fullscreen {
 }
 
 .wave-segment__ts {
+  border: 0;
+  background: none;
+  text-align: left;
+  align-self: start;
+  cursor: pointer;
+  padding: 3px 0 0;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 11px;
   color: var(--wave-text-faint);
@@ -2669,3 +2684,34 @@ body.wave-resizing-x {
 @media (prefers-reduced-motion: reduce) {
   .wave-playback__play-btn--waiting { animation: none; opacity: 0.6; }
 }
+
+.wave-waveform-tools {
+  display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0;
+  overflow-x: auto; scrollbar-width: thin;
+  > * { flex-shrink: 0; }
+  &::-webkit-scrollbar { height: 3px; }
+  &::-webkit-scrollbar-thumb { background: #525252; border-radius: 2px; }
+}
+.wave-selection-controls {
+  position: relative; display: flex; flex-wrap: nowrap; align-items: center; gap: 6px;
+  margin-left: auto; padding: 0 4px 0 8px; border-left: 1px solid #333;
+  height: 100%; font-size: 10px; color: var(--wave-text-secondary);
+  font-variant-numeric: tabular-nums; flex-shrink: 0; white-space: nowrap;
+  // "Words" becomes "Exact audio" during a drag; keep the fields anchored.
+  &__kind { flex: 0 0 11ch; width: 11ch; }
+  label { display: flex; align-items: center; gap: 3px; }
+  input { width: 66px; padding: 2px 3px; border: 1px solid #525252; background: #181818; color: inherit; font: inherit; }
+  input[aria-invalid="true"] { border-color: #ff5050; }
+  [role="status"] { position: absolute; top: 100%; right: 0; z-index: 30; padding: 6px 8px; background: #393939; color: #fff; }
+}
+.wave-pause-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 5; overflow: hidden; }
+.wave-pause-overlay__marker { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px solid #42be65; }
+.wave-pause-pill {
+  position: absolute; width: 88px; height: 21px; border: 1px solid #42be65; border-radius: 4px;
+  background: #153d23; color: #a7f0ba; font: 11px 'IBM Plex Mono', monospace;
+  white-space: nowrap; pointer-events: auto; cursor: pointer;
+  &:hover { background: #205a34; }
+  &:focus-visible { outline: 2px solid #a7f0ba; outline-offset: 1px; }
+}
+.wave-word--pause-token { cursor: pointer; }
+.wave-editor-scroll:focus-visible, .wave-timeline:focus-visible, .wave-resize-handle:focus-visible { outline: 1px solid var(--wave-accent); outline-offset: -2px; }

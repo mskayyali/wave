@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use crate::encode::ExportFormat;
+use crate::edit_plan::EditPlan;
 
 // ─── Data model ───────────────────────────────────────────────────────────────
 
@@ -92,7 +93,12 @@ pub fn rename_project(app: AppHandle, project_id: String, name: String) -> Resul
 #[tauri::command]
 pub fn save_edits(app: AppHandle, project_id: String, data: String) -> Result<(), String> {
     let path = project_dir(&app, &project_id)?.join("edits.json");
-    std::fs::write(path, data).map_err(|e| e.to_string())
+    let temporary = path.with_extension("json.tmp");
+    let mut file = std::fs::File::create(&temporary).map_err(|e| e.to_string())?;
+    use std::io::Write;
+    file.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    std::fs::rename(&temporary, &path).map_err(|e| e.to_string())
 }
 
 /// Load previously saved edit actions (JSON string), or None if none exist.
@@ -744,42 +750,20 @@ fn write_wav_f32(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), S
 
 // ─── Audio export ─────────────────────────────────────────────────────────────
 
-/// A range the edits cut, in milliseconds of the original audio.
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EditOp {
-    pub start_ms: f64,
-    pub end_ms:   f64,
-}
-
-/// A pause added in the editor: `ms` of room tone at `at_ms` (original time),
-/// looping `[tone_start_ms, tone_end_ms)` of the same recording, or silence.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InsertOp {
-    pub at_ms:         f64,
-    pub ms:            f64,
-    #[serde(default)]
-    pub tone_start_ms: Option<f64>,
-    #[serde(default)]
-    pub tone_end_ms:   Option<f64>,
-}
-
 /// Export the edited audio straight to the path the save dialog chose, in
 /// `format` (16-bit WAV when it's left out). Sends `export:progress`.
 #[tauri::command]
 pub async fn export_audio(
     app:        AppHandle,
     project_id: String,
-    ops:        Vec<EditOp>,
-    inserts:    Option<Vec<InsertOp>>,
+    plan:       EditPlan,
     dest_path:  String,
     enhanced:   Option<bool>,
     format:     Option<ExportFormat>,
 ) -> Result<(), String> {
     let dir  = project_dir(&app, &project_id)?;
     let dest = PathBuf::from(dest_path);
-    let inserts = inserts.unwrap_or_default();
+    plan.validate()?;
     let format = format.unwrap_or_default();
     format.checked()?;
     let name = format.name();
@@ -790,17 +774,13 @@ pub async fn export_audio(
         }));
     });
 
-    // Sort ops for a single linear pass through the file.
-    let mut sorted = ops;
-    sorted.sort_by(|a, b| a.start_ms.partial_cmp(&b.start_ms).unwrap_or(std::cmp::Ordering::Equal));
-
     // With speech enhancement on, export what's playing: the enhanced audio
     // (48 kHz mono), spliced the same way.
     if enhanced == Some(true) {
         let src = crate::enhance::enhanced_audio_path(&dir).ok_or("The enhanced audio is missing: enhance again or turn it off")?;
         return tokio::task::spawn_blocking(move || {
             let (samples, rate, channels) = read_wav(&src, &mut progress)?;
-            write_spliced(&samples, channels, rate, &sorted, &inserts, &format, &dest, &mut progress)
+            write_spliced(&samples, channels, rate, &plan, &format, &dest, &mut progress)
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -827,7 +807,7 @@ pub async fn export_audio(
                 read_wav(&wav_16k, &mut progress)?
             }
         };
-        write_spliced(&samples, channels, rate, &sorted, &inserts, &format, &dest, &mut progress)
+        write_spliced(&samples, channels, rate, &plan, &format, &dest, &mut progress)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -900,229 +880,18 @@ fn read_wav(src: &std::path::Path, progress: &mut ExportProgress) -> Result<(Vec
     Ok((samples, in_spec.sample_rate, channels))
 }
 
-/// The edited audio, interleaved: the kept pieces (cut edges snapped to zero
-/// crossings) and the added pauses, joined with 8 ms equal-power crossfades.
-fn splice(samples: &[f32], channels: usize, sr_hz: u32, ops: &[EditOp], inserts: &[InsertOp]) -> Vec<f32> {
-    let ch = channels.max(1);
-    let sr = sr_hz as f64;
-    let total_frames = samples.len() / ch;
-
-    // ── Convert op boundaries (ms → frame indices), clamp, filter, sort, merge ─
-    let mut cuts: Vec<(usize, usize)> = ops
-        .iter()
-        .map(|op| {
-            let s = ((op.start_ms / 1000.0) * sr).round() as usize;
-            let e = ((op.end_ms   / 1000.0) * sr).round() as usize;
-            (s.min(total_frames), e.min(total_frames))
-        })
-        .filter(|(s, e)| e > s)
-        .collect();
-    cuts.sort_by_key(|&(s, _)| s);
-
-    let mut merged: Vec<(usize, usize)> = Vec::new();
-    for (s, e) in cuts {
-        if let Some(last) = merged.last_mut() {
-            if s <= last.1 {
-                last.1 = last.1.max(e);
-                continue;
-            }
-        }
-        merged.push((s, e));
-    }
-
-    // ── Snap each cut edge to a nearby zero-crossing (±2 ms, on channel 0) ────
-    let snap_win = ((2.0 / 1000.0) * sr).round() as usize;
-    for (s, e) in merged.iter_mut() {
-        *s = nearest_zero_crossing_frame(samples, ch, *s, snap_win);
-        *e = nearest_zero_crossing_frame(samples, ch, *e, snap_win);
-    }
-    merged.retain(|&(s, e)| e > s);
-
-    // ── Build the kept frame segments (complement of the cut ranges) ──────────
-    let mut kept: Vec<(usize, usize)> = Vec::new();
-    let mut cursor = 0usize;
-    for &(s, e) in &merged {
-        if s > cursor {
-            kept.push((cursor, s));
-        }
-        cursor = e.max(cursor);
-    }
-    if cursor < total_frames {
-        kept.push((cursor, total_frames));
-    }
-
-    // ── Added pauses go between kept pieces: at their point, or at the join
-    //    of the cut they fall in (as the player places them) ─────────────────
-    let mut pauses: Vec<(usize, usize, Option<(usize, usize)>)> = inserts
-        .iter()
-        .filter(|p| p.ms > 0.0)
-        .map(|p| {
-            let mut at = (((p.at_ms / 1000.0) * sr).round() as usize).min(total_frames);
-            if let Some(&(_, e)) = merged.iter().find(|&&(s, e)| at >= s && at < e) { at = e; }
-            let frames = ((p.ms / 1000.0) * sr).round() as usize;
-            let tone = match (p.tone_start_ms, p.tone_end_ms) {
-                (Some(a), Some(b)) => {
-                    let (a, b) = ((((a / 1000.0) * sr) as usize).min(total_frames), (((b / 1000.0) * sr) as usize).min(total_frames));
-                    (b > a + 1).then_some((a, b))
-                }
-                _ => None,
-            };
-            (at, frames, tone)
-        })
-        .collect();
-    pauses.sort_by_key(|&(at, _, _)| at);
-
-    enum Piece { Audio(usize, usize), Pause(usize, Option<(usize, usize)>) }
-    let mut pieces: Vec<Piece> = Vec::new();
-    let mut next = 0;
-    for &(s, e) in &kept {
-        let mut from = s;
-        while next < pauses.len() && pauses[next].0 < e {
-            let (at, frames, tone) = pauses[next];
-            if at > from { pieces.push(Piece::Audio(from, at)); from = at; }
-            pieces.push(Piece::Pause(frames, tone));
-            next += 1;
-        }
-        if e > from { pieces.push(Piece::Audio(from, e)); }
-    }
-    for &(_, frames, tone) in &pauses[next..] { pieces.push(Piece::Pause(frames, tone)); }
-
-    // ── Assemble output frames with an equal-power crossfade at every join ────
-    let xfade = ((8.0 / 1000.0) * sr).round() as usize; // fade length in frames
-    let mut out: Vec<f32> = Vec::with_capacity(samples.len());
-
-    for (seg_idx, piece) in pieces.iter().enumerate() {
-        // A pause is room tone looped to length (frame i reads tone frame i mod its length), or silence.
-        let generated: Vec<f32>;
-        let seg: &[f32] = match *piece {
-            Piece::Audio(s, e) => &samples[s * ch..e * ch],
-            Piece::Pause(frames, tone) => {
-                generated = match tone {
-                    Some((a, b)) => (0..frames).flat_map(|i| {
-                        let f = a + i % (b - a);
-                        samples[f * ch..(f + 1) * ch].iter().copied()
-                    }).collect(),
-                    None => vec![0.0; frames * ch],
-                };
-                &generated
-            }
-        };
-        let seg_frames = seg.len() / ch;
-        if seg_idx == 0 || out.is_empty() {
-            out.extend_from_slice(seg);
-            continue;
-        }
-        let out_frames = out.len() / ch;
-        // Overlap is bounded by the fade length, the incoming segment, and what
-        // has already been written.
-        let f = xfade.min(seg_frames).min(out_frames);
-        if f == 0 {
-            out.extend_from_slice(seg);
-            continue;
-        }
-        let base_frame = out_frames - f;
-        for k in 0..f {
-            let t     = (k as f32 + 0.5) / f as f32;            // 0 → 1 across fade
-            let g_out = (t * std::f32::consts::FRAC_PI_2).cos(); // 1 → 0
-            let g_in  = (t * std::f32::consts::FRAC_PI_2).sin(); // 0 → 1
-            for c in 0..ch {
-                let oi = (base_frame + k) * ch + c;
-                let si = k * ch + c;
-                out[oi] = out[oi] * g_out + seg[si] * g_in;
-            }
-        }
-        out.extend_from_slice(&seg[f * ch..]);
-    }
-    out
-}
-
-
-/// Splice interleaved f32 PCM by removing `ops` time ranges, joining the kept
-/// segments with an equal-power crossfade, and writing the result as a 16-bit
-/// PCM WAV with `channels` channels at `sr_hz`.
-///
-/// ## Why a gentle (crossfade) join
-/// A hard splice jumps the amplitude discontinuously → a click.  Fading both
-/// sides to silence removes the click but leaves an audible dip.  Instead we
-/// overlap the outgoing tail and incoming head and blend them with
-/// constant-power gains (cos/sin) so loudness stays flat across the join.  Each
-/// cut edge is first snapped to a nearby zero-crossing so there is almost
-/// nothing to smooth over.
-///
-/// ## Why 16-bit PCM output
-/// WebKit / Safari mis-handle 32-bit float WAV (they can misread the bit depth
-/// and play at 3× speed or emit static).  16-bit signed PCM (WAVE_FORMAT_PCM,
-/// 0x0001) is universally supported by every browser engine and audio player.
-#[allow(clippy::too_many_arguments)]
+/// Encode exactly the resolved timeline used for playback and subtitles.
 fn write_spliced(
-    samples:  &[f32],
-    channels: usize,
-    sr_hz:    u32,
-    ops:      &[EditOp],
-    inserts:  &[InsertOp],
-    format:   &ExportFormat,
-    dst:      &std::path::Path,
-    progress: &mut ExportProgress,
+    samples: &[f32], channels: usize, sr_hz: u32, plan: &EditPlan,
+    format: &ExportFormat, dst: &std::path::Path, progress: &mut ExportProgress,
 ) -> Result<(), String> {
-    let out = splice(samples, channels, sr_hz, ops, inserts);
-    crate::encode::write(&out, channels.max(1), sr_hz, format, dst, &mut |p| progress.writing(p))
-}
-
-/// Find the frame index nearest `frame` (within ±`window` frames) where channel
-/// 0 of the interleaved signal crosses zero.  Falls back to `frame` (clamped)
-/// when no crossing is found in the window.
-fn nearest_zero_crossing_frame(samples: &[f32], ch: usize, frame: usize, window: usize) -> usize {
-    let total_frames = samples.len() / ch;
-    if total_frames == 0 { return 0; }
-    let idx = frame.min(total_frames - 1);
-    if window == 0 { return idx; }
-
-    let lo = idx.saturating_sub(window);
-    let hi = (idx + window).min(total_frames - 1);
-
-    let mut best      = idx;
-    let mut best_dist = usize::MAX;
-    let mut i = lo;
-    while i < hi {
-        let a = samples[i * ch];        // channel 0 of frame i
-        let b = samples[(i + 1) * ch];  // channel 0 of frame i+1
-        if (a <= 0.0 && b >= 0.0) || (a >= 0.0 && b <= 0.0) {
-            let dist = if i >= idx { i - idx } else { idx - i };
-            if dist < best_dist {
-                best_dist = dist;
-                best = i;
-            }
-        }
-        i += 1;
-    }
-    best
+    let out = crate::edit_plan::render(samples, channels, sr_hz, plan)?;
+    crate::encode::write(&out, channels, sr_hz, format, dst, &mut |p| progress.writing(p))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn added_pauses_are_spliced_in() {
-        let sr = 48_000u32;
-        let mut x: Vec<f32> = (0..sr as usize).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
-        for v in x[43_200..].iter_mut() { *v *= 0.01; } // a quiet stretch to use as room tone
-        let xf = 384; // the 8 ms crossfade, overlapped at each join
-
-        // 250 ms at 0.5 s, room tone from 0.9–1.0 s: the file grows by it.
-        let inserts = [InsertOp { at_ms: 500.0, ms: 250.0, tone_start_ms: Some(900.0), tone_end_ms: Some(1000.0) }];
-        let out = splice(&x, 1, sr, &[], &inserts);
-        assert_eq!(out.len(), 48_000 + 12_000 - 2 * xf);
-        assert!(out[24_000 + 1_000..24_000 + 10_000].iter().all(|v| v.abs() < 0.01), "the pause is the quiet room tone");
-        assert!(out[34_000..].iter().take(2_000).any(|v| v.abs() > 0.3), "the audio carries on after it");
-
-        // Inside a cut, it goes at the cut's join.
-        let ops = [EditOp { start_ms: 400.0, end_ms: 600.0 }];
-        let inserts = [InsertOp { at_ms: 500.0, ms: 100.0, tone_start_ms: None, tone_end_ms: None }];
-        let out = splice(&x, 1, sr, &ops, &inserts);
-        let expected = 48_000 - 9_600 + 4_800 - 2 * xf;
-        assert!((out.len() as i64 - expected as i64).abs() < 200, "length {} vs {expected}", out.len());
-    }
 
     /// The export path end to end, without the app: read, splice, encode, and
     /// report progress in order.
@@ -1142,7 +911,16 @@ mod tests {
         let mut progress = ExportProgress::new(&format, move |phase, p| seen.lock().unwrap().push((phase, p)));
         progress.reading(1.0);
         // Half a second cut from the middle.
-        write_spliced(&x, 2, sr, &[EditOp { start_ms: 750.0, end_ms: 1250.0 }], &[], &format, &dst, &mut progress).unwrap();
+        let plan: EditPlan = serde_json::from_value(serde_json::json!({
+            "version": 1, "sourceDurationMs": 2000.0, "durationMs": 1495.0,
+            "pieces": [
+                { "sourceStartMs": 0.0, "sourceEndMs": 750.0, "outputStartMs": 0.0,
+                  "durationMs": 750.0, "fadeInMs": 0.0, "fadeOutMs": 5.0, "pause": false, "tone": null },
+                { "sourceStartMs": 1250.0, "sourceEndMs": 2000.0, "outputStartMs": 745.0,
+                  "durationMs": 750.0, "fadeInMs": 5.0, "fadeOutMs": 0.0, "pause": false, "tone": null }
+            ]
+        })).unwrap();
+        write_spliced(&x, 2, sr, &plan, &format, &dst, &mut progress).unwrap();
 
         let (y, rate, ch, _) = decode_to_interleaved_f32(&dst).unwrap();
         assert_eq!((rate, ch), (sr, 2));

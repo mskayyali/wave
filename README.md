@@ -2,11 +2,11 @@
 
 **A text-based audio editor for podcasts, made for the Mac.** Edit audio by editing text: delete a word in the transcript and it's cut from the audio. Everything runs on your Mac. There's no cloud, no account and no upload.
 
-![Wave's welcome screen](docs/screenshot.webp)
+![Wave's editor](docs/editor.jpg)
 
 ## Download
 
-**[Download Wave 1.1.0 for Mac](https://github.com/mskayyali/wave/releases/download/v1.1.0/Wave_1.1.0_aarch64.dmg)** (DMG, 19 MB). Earlier versions are on the [releases page](https://github.com/mskayyali/wave/releases), and there's a [website](https://mskayyali.github.io/wave/) too.
+**[Download Wave 1.2.0 for Mac](https://github.com/mskayyali/wave/releases/download/v1.2.0/Wave_1.2.0_aarch64.dmg)** (DMG). Earlier versions are on the [releases page](https://github.com/mskayyali/wave/releases), and there's a [website](https://mskayyali.github.io/wave/) too.
 
 ### What you need
 
@@ -27,7 +27,7 @@ Nothing else: no account, no FFmpeg, no Python.
    xattr -dr com.apple.quarantine /Applications/Wave.app
    ```
 
-3. In Wave, click **Set up transcription** (or open **Settings**) and download **Transcription** (1.6 GB: Whisper Large v3 Turbo and the word aligner). Two more models are optional:
+3. In Wave, click **Set up transcription** (or open **Settings**) and download **Whisper** (1.6 GB: Whisper Large v3 Turbo and the word aligner), or **Parakeet v3** (681 MB). Choose the model under **Settings → Transcription model**; Wave remembers the choice for new recordings. Parakeet includes word timing, supports English and 24 other European languages, and does not support Arabic. Existing transcripts and edits stay as they are. Two more models are optional:
    - **DPDFNet** (14 MB): removes background noise and room echo.
    - **Speaker detection** (115 MB): finds who speaks when.
 
@@ -38,7 +38,7 @@ From version 1.1, Wave updates itself. It checks quietly in the background, and 
 ## Quick start
 
 1. Click **New project** (⌘N) and choose a recording, or drop audio files anywhere on the window. MP3, WAV, M4A, FLAC and more work.
-2. Wave transcribes it on your Mac. On an M3 Pro, that takes about an eighth of the recording's length.
+2. Wave transcribes it on your Mac using the model selected in Settings.
 3. Edit the text:
    - Select words and press ⌫ to cut them from the audio. Press **C** first to hear the result.
    - Press Space to play. The playing word is highlighted, and clicking a word jumps to it.
@@ -106,6 +106,8 @@ Wave includes an MCP server, so an AI agent can read your transcripts and make t
 
 3. Keep Wave open, and ask, for example: *"In my project Episode 12, remove the filler words and false starts, tighten the pauses, and enhance the audio with the Clearer EQ."*
 
+Agents can use **plan_edit** to dry-run word or time cuts through the actual boundary and fade planner, then apply with **expected_revision** so a concurrent edit cannot silently invalidate the plan. **get_transitions** exposes resolved source/output times, fades, manual overrides and joins flagged for listening. Time cuts overlapping kept speech require **allow_word_trim=true** for an intentional exact trim; whole-word edits should use **cut_words**. Audio edits wait until analysis is ready. Reconnect MCP clients using the updated Wave executable to discover the new tools.
+
 Good to know:
 
 - **Wave must be running** with AI agents turned on.
@@ -129,6 +131,7 @@ Then:
 git clone https://github.com/mskayyali/wave.git
 cd wave
 bun install
+bun run setup:parakeet # download and verify NVIDIA's small native Mac runtime
 bunx tauri dev      # run Wave in development
 bunx tauri build    # build Wave.app and the DMG
 ```
@@ -163,7 +166,10 @@ Wave is a [Tauri 2](https://tauri.app/) app. The interface is React and TypeScri
 |---|---|
 | `projects.rs` | Projects, audio import, edits and audio export |
 | `transcription.rs` | Transcription with whisper.cpp (`whisper-rs`, on the GPU) |
+| `parakeet.rs` | Parakeet TDT v3 through bundled NeMo-Speech.cpp, with bounded chunks and original-audio word timings |
 | `alignment.rs` | Word timings by wav2vec2 forced alignment (ONNX Runtime) |
+| `src/lib/editPlan.ts`, `edit_plan.rs` | One resolved timeline for playback, audio export and subtitles; matching PCM renderers |
+| `src/lib/cutBoundaries.ts` | Text-cut boundaries constrained to gaps around kept words |
 | `enhance.rs`, `dpdfnet.rs`, `eq.rs`, `master.rs` | Noise removal, EQ, and loudness (ITU-R BS.1770-4) with a true-peak limiter |
 | `encode.rs`, `lame.rs` | MP3, AAC, WAV and FLAC files |
 | `speakers.rs` | Speaker detection |
@@ -174,11 +180,28 @@ Wave is a [Tauri 2](https://tauri.app/) app. The interface is React and TypeScri
 
 Everything is stored in `~/Library/Application Support/com.mskayyali.wave/`: the models in `models/`, and each project in `projects/`. Edits are kept as a list and only applied to the audio at export, so the original is never changed.
 
+### Precise editing and returning to a project
+
+Text selections remove the selected words with protected boundaries. Waveform selections and numeric start/end/duration controls cut the exact audio range on a 1 ms grid; snapping is optional. The transcript and waveform derive removed/partly cut markers from the same resolved audio cuts. Even a 1 ms trim is marked; a word with any audio remaining stays partially cut. Text and subtitle exports retain that word with clipped timing. Restore audio brings back manual trims too, and restoration and boundary drags each undo as one transaction.
+
+Use **Text ↗** or the context menu to reveal the same selection in the other editor; **F6** switches focus. **Tab** moves through controls; **⌥↓ / ⌥↑** navigate cuts. **Follow** controls playback following in both views. Manual scrolling pauses following until it is enabled again. Selection loops run on the audio clock at every playback speed, including across cuts and inserted pauses.
+
+Each project's last playhead, selection, active editor, Flow/Segments view, transcript scroll anchor, waveform time window, Follow setting and panel height are saved locally. Reopening restores them after audio and edits load and stays paused. Transcript or alignment changes invalidate positional selections and scroll anchors. Edit-file writes are ordered and replaced atomically so a late save cannot overwrite a newer one.
+
+### Checking audio edits
+
+Run `bun test` for the timeline, boundary and playback regression tests, and `cargo test --lib` in `src-tauri/` for the native renderer and export tests. `bun run build` checks the interface and production build. With the local development server running, `node tests/browser/run-editor.mjs` runs the isolated browser regression fixture (requires Playwright and Chromium; `PLAYWRIGHT_MODULE` and `CHROME_PATH` can point to an existing installation; `BROWSER_ENGINE=webkit` and `BROWSER_PATH` run the same suite in WebKit). It uses generated audio and a mock project, never user media.
+
+`src/lib/editPlan.ts` resolves cuts and inserted pauses into source spans, output positions and bounded fades. Both normal and speed-adjusted playback render that plan; audio export receives the same plan, and subtitles use its source-to-output mapping. Renderers must not independently snap boundaries or change overlaps. Linear fades avoid boosting correlated signals, and room-tone loops blend at every wrap. Automatic text cuts protect kept word spans; tightly joined speech is marked **Review transition** on the waveform and can be auditioned with **C**.
+
+The playback and native renderer tests share `tests/fixtures/edit-plans.json`, including stereo, fractional boundaries, short segments and inserted pauses. Listening tests on real speech are still needed when changing boundary scoring or fade defaults: synthetic parity tests establish consistency, not whether a particular speech edit sounds natural.
+
 ## Credits
 
 Wave runs these models, downloaded in the app:
 
 - [Whisper](https://github.com/openai/whisper) Large v3 Turbo through [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (MIT).
+- [Parakeet TDT v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) by NVIDIA (CC BY 4.0), pinned Q8 model, through [NeMo-Speech.cpp 0.3.0](https://github.com/NVIDIA/NeMo-Speech.cpp/releases/tag/v0.3.0) (Apache-2.0; bundled third-party notices). The model is downloaded locally and verified against NVIDIA's SHA-256. Parakeet does not report language IDs or calibrated confidence in this runtime; Details shows those as unavailable.
 - [wav2vec2](https://huggingface.co/facebook/wav2vec2-base-960h) (Apache-2.0).
 - [DPDFNet](https://github.com/ceva-ip/DPDFNet) by Ceva (Apache-2.0).
 - [Nemotron 3 Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization) by NVIDIA (OpenMDW 1.1).

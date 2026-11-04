@@ -1,40 +1,26 @@
 // A gapless player for the *edited* timeline: plays the original audio while
 // skipping cut ranges sample-accurately, joining the kept pieces with the same
-// 8 ms equal-power crossfade the exporter uses (write_spliced in
-// src-tauri/src/projects.rs) — so what you hear while editing is what exports.
+// resolved joins sent to the exporter — so editing and export share timing.
 //
 // It mimics the slice of HTMLMediaElement that wavesurfer.js drives through its
 // `media` option, so the waveform cursor and events work unchanged.
 // `currentTime` is in ORIGINAL-timeline seconds and jumps over cuts.
 //
-// Added pauses (setInserts) are room tone: a quiet stretch of the same
+// Added pauses are room tone: a quiet stretch of the same
 // recording, looped for as long as the pause, crossfaded in and out like any
 // join. While one plays, `currentTime` holds at the point it was added.
 //
-// At 1× every kept segment is an AudioBufferSourceNode scheduled on the audio
-// clock up front: no main-thread timing is involved, so cuts stay exact even
-// when the window is in the background (requestAnimationFrame is throttled
-// there). At other speeds playback goes through Signalsmith Stretch, which
+// At 1× rendered chunks are scheduled ahead on the audio clock. Each join
+// is rendered before it plays, independent of UI animation timing. At other
+// speeds playback goes through Signalsmith Stretch, which
 // preserves pitch. It is fed the already-edited signal (kept pieces joined
 // with the same crossfades), streamed in chunks, so it never has to jump.
 
 import SignalsmithStretch, { type StretchNode } from 'signalsmith-stretch';
 
-export interface CutRange {
-  startMs: number;
-  endMs:   number;
-}
+import { buildEditPlan, editedTime, renderPlan, type CutRange, type EditPlan } from './editPlan';
+export type { CutRange, InsertedPause } from './editPlan';
 
-/** A pause added at `atMs` (original time), filled with room tone. */
-export interface InsertedPause {
-  atMs: number;
-  ms:   number;
-  /** The room tone to loop (original time); silence without one. */
-  tone?: { startMs: number; endMs: number };
-}
-
-/** Matches the export crossfade (write_spliced in projects.rs). */
-const CROSSFADE_S  = 0.008;
 /** Softens starting or stopping playback in the middle of a waveform. */
 const EDGE_FADE_S  = 0.005;
 /** Scheduling headroom so the first segment starts cleanly. */
@@ -47,77 +33,17 @@ const STRETCH_CHUNK_S     = 15;
 const STRETCH_LOW_WATER_S = 8;
 /** How often the stretcher reports its read position. */
 const STRETCH_POLL_S      = 0.25;
-const CURVE_POINTS = 64;
-const FADE_IN  = Float32Array.from({ length: CURVE_POINTS }, (_, i) => Math.sin((i / (CURVE_POINTS - 1)) * (Math.PI / 2)));
-const FADE_OUT = Float32Array.from({ length: CURVE_POINTS }, (_, i) => Math.cos((i / (CURVE_POINTS - 1)) * (Math.PI / 2)));
-
 type Listener = (...args: unknown[]) => void;
 
-/** A cut, in seconds. */
-interface Span {
-  start: number;
-  end:   number;
-}
-
-/** Options for a one-off playRange. */
 export interface PlayRangeOptions {
-  /** Play the original audio, cuts and all — to hear what an edit removed. */
   ignoreCuts?: boolean;
-  /** Extra cuts for this playback only — to preview an edit before making it. */
-  extraCuts?:  CutRange[];
+  extraCuts?: CutRange[];
 }
 
-/**
- * An uncut stretch of original audio, in seconds; or, with `fill`, an added
- * pause at `srcStart` (= `srcEnd`) lasting `fill.dur`, looping `tone`.
- */
-interface Kept {
-  srcStart: number;
-  srcEnd:   number;
-  fill?:    { dur: number; tone: Span | null };
-}
-
-/** A pause in seconds. */
-interface Insert {
-  at:   number;
-  dur:  number;
-  tone: Span | null;
-}
-
-const lengthOf = (k: Kept) => (k.fill ? k.fill.dur : k.srcEnd - k.srcStart);
-
-/** A kept stretch placed on the edited timeline (seconds from its start). */
-interface Placed extends Kept {
-  at:   number;
-  xIn:  number;
-  xOut: number;
-}
-
-/** A kept stretch of original audio, placed on the AudioContext clock. */
 interface Segment {
   srcStart: number;
-  srcEnd:   number;
+  srcEnd: number;
   outStart: number;
-}
-
-/**
- * Lay kept stretches end to end, each join overlapped by a crossfade bounded
- * by both neighbours' lengths (as exported). Returns the edited length too.
- */
-function layOut(kept: Kept[]): { placed: Placed[]; length: number } {
-  const placed: Placed[] = [];
-  let at = 0;
-  for (let k = 0; k < kept.length; k++) {
-    const dur  = lengthOf(kept[k]);
-    const prev = kept[k - 1];
-    const next = kept[k + 1];
-    const xIn  = prev ? Math.min(CROSSFADE_S, dur / 2, lengthOf(prev) / 2) : 0;
-    const xOut = next ? Math.min(CROSSFADE_S, dur / 2, lengthOf(next) / 2) : 0;
-    at -= xIn;
-    placed.push({ ...kept[k], at, xIn, xOut });
-    at += dur;
-  }
-  return { placed, length: at };
 }
 
 interface Session {
@@ -125,6 +51,11 @@ interface Session {
   sources:  AudioScheduledSourceNode[];
   segments: Segment[];
   rate:     number;
+  outputFromMs: number;
+  outputToMs: number;
+  startTime: number;
+  loop: { fromMs: number; toMs: number } | null;
+  plan: EditPlan;
   /** Set for sessions played through the stretcher. */
   stretch:  StretchNode | null;
   endTimer: ReturnType<typeof setTimeout> | null;
@@ -144,9 +75,9 @@ export class EditPlayer {
 
   private readonly listeners = new Map<string, Set<Listener>>();
   private readonly master: GainNode;
-  private cuts: Span[] = [];
-  private inserts: Insert[] = [];
+  private plan: EditPlan = buildEditPlan(0, []);
   private position    = 0;
+  private outputPosition: number | null = 0;
   private rate        = 1;
   private volumeValue = 1;
   private mutedValue  = false;
@@ -158,7 +89,8 @@ export class EditPlayer {
   private stretchChannels = 0;
   private destroyed   = false;
   /** Set while playing a one-off range (playRange): where to stop, and the cuts it honours. */
-  private range: { end: number; cuts: Span[] } | null = null;
+  private loop: { startMs: number; endMs: number } | null = null;
+  private range: { end: number; plan: EditPlan } | null = null;
 
   /**
    * `buffer` may come later (`setBuffer`): the waveform is drawn from
@@ -182,7 +114,7 @@ export class EditPlayer {
   setBuffer(buffer: AudioBuffer | null): void {
     if (buffer === this.buffer || this.destroyed) return;
     const playing = !this.paused;
-    if (playing && this.session) this.position = this.currentTime;
+    if (playing && this.session) { this.position = this.currentTime; this.outputPosition = this.outputTime(); }
     this.stopSession();
     if (this.stretch && buffer && buffer.numberOfChannels !== this.stretchChannels) {
       // The stretcher's channel count is fixed when it's made.
@@ -219,44 +151,42 @@ export class EditPlayer {
   get duration(): number { return this.buffer?.duration ?? this.knownDuration; }
 
   // ── Cuts ─────────────────────────────────────────────────────────────────
-  /** Replace the cut list. A playing session is rescheduled from where it is. */
-  setCuts(cuts: CutRange[]): void {
-    this.cuts = this.normalizeCuts(cuts);
-    if (!this.paused) this.restart();
+  /** The exact plan also sent to export and used to time subtitles. */
+  setPlan(plan: EditPlan): void {
+    if (plan === this.plan) return;
+    this.position = this.currentTime;
+    this.stopSession();
+    this.plan = plan;
+    this.outputPosition = this.position === 0 ? 0 : null;
+    if (this.range) this.range.plan = plan;
+    if (!this.paused) void this.startSession();
   }
 
-  /** Replace the added pauses. A playing session is rescheduled from where it is. */
-  setInserts(inserts: InsertedPause[]): void {
-    this.inserts = inserts
-      .filter((i) => i.ms > 0)
-      .map((i) => ({
-        at:   Math.max(0, Math.min(this.duration, i.atMs / 1000)),
-        dur:  i.ms / 1000,
-        tone: i.tone && i.tone.endMs - i.tone.startMs > 20 ? { start: i.tone.startMs / 1000, end: i.tone.endMs / 1000 } : null,
-      }))
-      .sort((a, b) => a.at - b.at);
-    if (!this.paused) this.restart();
-  }
-
-  /** Cut ranges in seconds, clamped to the audio, sorted, overlaps merged. */
-  private normalizeCuts(cuts: CutRange[]): Span[] {
-    const sorted = cuts
-      .map((c) => ({ start: Math.max(0, c.startMs / 1000), end: Math.min(this.duration, c.endMs / 1000) }))
-      .filter((c) => c.end > c.start)
-      .sort((a, b) => a.start - b.start);
-    const merged: Span[] = [];
-    for (const c of sorted) {
-      const last = merged[merged.length - 1];
-      if (last && c.start <= last.end) last.end = Math.max(last.end, c.end);
-      else merged.push({ ...c });
-    }
-    return merged;
+  /** Selection loops are scheduled by the audio engine, independent of UI frames. */
+  setLoop(range: { startMs: number; endMs: number } | null): void {
+    const next = range && Number.isFinite(range.startMs) && Number.isFinite(range.endMs)
+      ? { startMs: Math.max(0, range.startMs), endMs: Math.min(this.duration * 1000, range.endMs) } : null;
+    const valid = next && next.endMs - next.startMs >= 1 ? next : null;
+    if (valid?.startMs === this.loop?.startMs && valid?.endMs === this.loop?.endMs) return;
+    this.loop = valid;
+    if (!this.paused && !this.range) this.restart();
   }
 
   // ── Transport ────────────────────────────────────────────────────────────
   get currentTime(): number {
     const s = this.session;
     if (!s || s.segments.length === 0) return this.position;
+    if (s.loop) {
+      const output = this.outputTime();
+      // A pause holds at its insertion point. Binary search the resolved plan.
+      let lo = 0, hi = s.plan.pieces.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (s.plan.pieces[mid].outputStartMs <= output) lo = mid + 1; else hi = mid;
+      }
+      const piece = s.plan.pieces[Math.max(0, lo - 1)];
+      return piece ? (piece.sourceStartMs + (piece.pause ? 0 : Math.min(piece.durationMs, Math.max(0, output - piece.outputStartMs)))) / 1000 : this.position;
+    }
     const now = this.ctx.currentTime;
     let seg = s.segments[0];
     for (const candidate of s.segments) {
@@ -271,6 +201,7 @@ export class EditPlayer {
     // Stop first: restart() would resume from the old session's position.
     this.stopSession();
     this.range = null;
+    this.outputPosition = value <= 0 ? 0 : null;
     this.position = this.skipCut(Math.max(0, Math.min(value, this.duration)));
     if (!this.paused) void this.startSession();
     this.emit('seeking');
@@ -303,7 +234,7 @@ export class EditPlayer {
   async play(): Promise<void> {
     if (!this.paused || this.destroyed) return;
     if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => undefined);
-    if (this.position >= this.duration - 0.01) this.position = 0;
+    if (this.outputPosition === null && this.position >= this.duration - 0.001) { this.position = 0; this.outputPosition = 0; }
     this.range = null;
     this.paused = false;
     this.emit('play');
@@ -314,13 +245,14 @@ export class EditPlayer {
   async playRange(start: number, end: number, options: PlayRangeOptions = {}): Promise<void> {
     if (this.destroyed || end <= start) return;
     this.stopSession();
-    const cuts = options.ignoreCuts
-      ? []
+    const plan = options.ignoreCuts
+      ? buildEditPlan(this.plan.sourceDurationMs, [])
       : options.extraCuts?.length
-        ? this.normalizeCuts([...this.cuts.map((c) => ({ startMs: c.start * 1000, endMs: c.end * 1000 })), ...options.extraCuts])
-        : this.cuts;
-    this.range    = { end: Math.min(end, this.duration), cuts };
-    this.position = this.skipCut(Math.max(0, start), cuts);
+        ? buildEditPlan(this.plan.sourceDurationMs, [...this.plan.cuts, ...options.extraCuts], this.plan.inserts)
+        : this.plan;
+    this.range = { end: Math.min(end, this.duration), plan };
+    this.outputPosition = start <= 0 ? 0 : null;
+    this.position = this.skipCut(Math.max(0, start), plan);
     if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => undefined);
     if (this.paused) {
       this.paused = false;
@@ -333,6 +265,7 @@ export class EditPlayer {
   pause(): void {
     if (this.paused) return;
     this.position = this.currentTime;
+    this.outputPosition = this.range ? null : this.outputTime();
     this.stopSession();
     this.range = null;
     this.paused = true;
@@ -353,206 +286,139 @@ export class EditPlayer {
     this.master.gain.value = this.mutedValue ? 0 : this.volumeValue;
   }
 
+  private outputTime(): number {
+    const s = this.session;
+    if (s?.loop) {
+      const elapsed = Math.max(0, this.ctx.currentTime - s.startTime) * s.rate * 1000;
+      return s.loop.fromMs + ((s.outputFromMs - s.loop.fromMs + elapsed) % (s.loop.toMs - s.loop.fromMs));
+    }
+    return s ? Math.min(s.outputToMs, s.outputFromMs + Math.max(0, this.ctx.currentTime - s.startTime) * s.rate * 1000)
+      : this.outputPosition ?? editedTime(this.range?.plan ?? this.plan, this.position * 1000, 'start');
+  }
+
   private restart(): void {
+    this.outputPosition = this.outputTime();
     this.position = this.currentTime;
     this.stopSession();
     void this.startSession();
   }
 
-  private skipCut(t: number, cuts: Span[] = this.cuts): number {
-    for (const c of cuts) if (t >= c.start && t < c.end) return c.end;
+  private skipCut(t: number, plan = this.range?.plan ?? this.plan): number {
+    for (const c of plan.cuts) if (t * 1000 >= c.startMs && t * 1000 < c.endMs) return c.endMs / 1000;
     return t;
   }
 
-  /**
-   * The kept (uncut) stretches of original audio from `from` to the end, with
-   * the added pauses between them. A pause added inside a cut sits at the cut's
-   * join; one at `from` plays first.
-   */
-  private keptFrom(from: number, cuts: Span[] = this.cuts): Kept[] {
-    const stretches: Kept[] = [];
-    let cursor = this.skipCut(from, cuts);
-    for (const c of cuts) {
-      if (c.end <= cursor) continue;
-      if (c.start > cursor) stretches.push({ srcStart: cursor, srcEnd: c.start });
-      cursor = Math.max(cursor, c.end);
-    }
-    if (cursor < this.duration) stretches.push({ srcStart: cursor, srcEnd: this.duration });
-    const kept = stretches.filter((k) => k.srcEnd - k.srcStart > 0.0005);
-
-    const start = this.skipCut(from, cuts);
-    const pauses = this.inserts
-      .map((i) => ({ ...i, at: this.skipCut(i.at, cuts) }))
-      .filter((i) => i.at >= start - 1e-6);
-    if (pauses.length === 0) return kept;
-    const out: Kept[] = [];
-    let p = 0;
-    const fill = (i: Insert): Kept => ({ srcStart: i.at, srcEnd: i.at, fill: { dur: i.dur, tone: i.tone } });
-    for (const k of kept) {
-      let piece = { ...k };
-      while (p < pauses.length && pauses[p].at < piece.srcEnd - 1e-6) {
-        const i = pauses[p++];
-        if (i.at > piece.srcStart + 1e-6) {
-          out.push({ srcStart: piece.srcStart, srcEnd: i.at });
-          piece = { srcStart: i.at, srcEnd: piece.srcEnd };
-        }
-        out.push(fill(i));
-      }
-      out.push(piece);
-    }
-    while (p < pauses.length) out.push(fill(pauses[p++]));
-    return out.filter((k) => k.fill || k.srcEnd - k.srcStart > 0.0005);
-  }
-
-  /** What to play from `from`: everything kept, or just the current playRange. */
-  private toPlay(from: number): Kept[] {
-    const range = this.range;
-    if (!range) return this.keptFrom(from);
-    return this.keptFrom(from, range.cuts)
-      .filter((k) => k.srcStart < range.end || (k.fill && k.srcStart <= range.end))
-      .map((k) => (k.fill ? k : { srcStart: k.srcStart, srcEnd: Math.min(k.srcEnd, range.end) }))
-      .filter((k) => k.fill || k.srcEnd - k.srcStart > 0.0005);
-  }
-
   private async startSession(): Promise<void> {
-    // No audio yet: setBuffer starts the session when it arrives.
     if (!this.buffer) return;
     const generation = ++this.generation;
-    const kept = this.toPlay(this.position);
-    if (kept.length === 0) {
-      this.finish();
-      return;
-    }
+    const plan = this.range?.plan ?? this.plan;
+    const sr = this.buffer.sampleRate;
+    const loopRange = this.range ? null : this.loop;
+    if (loopRange && !plan.pieces.some(p => p.pause
+      ? p.sourceStartMs >= loopRange.startMs && p.sourceStartMs <= loopRange.endMs
+      : p.sourceEndMs > loopRange.startMs && p.sourceStartMs < loopRange.endMs)) { this.finish(); return; }
+    const loopFrom = loopRange ? Math.round(editedTime(plan, loopRange.startMs, 'start') * sr / 1000) : 0;
+    const loopTo = loopRange ? Math.round(editedTime(plan, loopRange.endMs, 'end') * sr / 1000) : 0;
+    const requested = Math.round((this.outputPosition ?? editedTime(plan, this.position * 1000, 'start')) * sr / 1000);
+    const from = loopRange && (requested < loopFrom || requested >= loopTo) ? loopFrom : requested;
+    const to = loopRange ? loopTo : Math.round((this.range ? editedTime(plan, this.range.end * 1000, 'end') : plan.durationMs) * sr / 1000);
+    if (to <= from) { this.finish(); return; }
     const rate = this.rate;
     const stretch = rate === 1 ? null : await this.loadStretch().catch(() => null);
     if (generation !== this.generation || this.paused) return;
 
+    const channels = Array.from({ length: this.buffer.numberOfChannels }, (_, c) => this.buffer!.getChannelData(c));
+    const chunk = Math.round(STRETCH_CHUNK_S * sr);
+    const firstEnd = Math.min(to, from + chunk);
+    const firstChunk = renderPlan(plan, channels, sr, loopRange ? loopFrom : from, loopRange ? loopTo : firstEnd);
+    let loopBuffer: AudioBuffer | null = null;
+    if (loopRange) {
+      const fade = Math.min(Math.round(EDGE_FADE_S * sr), Math.floor((loopTo - loopFrom) / 2));
+      for (const data of firstChunk) for (let i = 0; i < fade; i++) {
+        const g = (i + 0.5) / fade;
+        data[i] *= g; data[data.length - 1 - i] *= g;
+      }
+      if (stretch) {
+        await stretch.dropBuffers();
+        if (generation !== this.generation || this.paused) return;
+        await stretch.addBuffers(firstChunk, firstChunk.map(c => c.buffer));
+        if (generation !== this.generation || this.paused) return;
+      } else {
+        loopBuffer = this.ctx.createBuffer(channels.length, loopTo - loopFrom, sr);
+        firstChunk.forEach((data, c) => loopBuffer!.copyToChannel(data, c));
+      }
+    }
     const gain = this.ctx.createGain();
     gain.connect(this.master);
     const t0 = this.ctx.currentTime + (stretch ? STRETCH_LOOKAHEAD_S : LOOKAHEAD_S);
-    // Silent until t0: a shared stretcher may still be winding down the last session.
     gain.gain.setValueAtTime(0, this.ctx.currentTime);
     gain.gain.setValueAtTime(0, t0);
     gain.gain.linearRampToValueAtTime(1, t0 + EDGE_FADE_S);
-
-    const session: Session = { gain, sources: [], segments: [], rate: stretch ? rate : 1, stretch, endTimer: null };
+    const session: Session = { gain, sources: [], segments: [], rate: stretch ? rate : 1, stretch, endTimer: null, outputFromMs: from * 1000 / sr, outputToMs: to * 1000 / sr, startTime: t0, plan, loop: loopRange ? { fromMs: loopFrom * 1000 / sr, toMs: loopTo * 1000 / sr } : null };
     this.session = session;
-    const endAt = stretch
-      ? this.playStretched(session, stretch, kept, t0)
-      : this.playExact(session, kept, t0);
-
-    // The last source's `ended` fires from the audio thread's timeline, so it
-    // isn't delayed by background timer throttling the way setTimeout is.
-    const last = session.sources[session.sources.length - 1];
-    if (last) {
-      last.onended = () => { if (this.session === session) this.finish(); };
-    } else {
-      session.endTimer = setTimeout(() => { if (this.session === session) this.finish(); },
-        Math.max(0, (endAt - this.ctx.currentTime) * 1000) + 20);
-    }
-  }
-
-  /** 1×: one source per kept segment, crossfaded exactly like the exporter. */
-  private playExact(session: Session, kept: Kept[], t0: number): number {
-    const { placed, length } = layOut(kept);
-    for (const piece of placed) {
-      const { srcStart, srcEnd, at, xIn, xOut } = piece;
-      const dur   = lengthOf(piece);
-      const start = t0 + at;
-      const source = this.ctx.createBufferSource();
-      source.buffer = this.buffer;
-      const fade = this.ctx.createGain();
-      source.connect(fade);
-      fade.connect(session.gain);
-      if (xIn > 0)  fade.gain.setValueCurveAtTime(FADE_IN, start, xIn);
-      if (xOut > 0) fade.gain.setValueCurveAtTime(FADE_OUT, start + dur - xOut, xOut);
-      if (piece.fill) {
-        // Room tone, looped for the pause; silence when there's none.
-        const tone = piece.fill.tone;
-        if (tone) {
-          source.loop = true;
-          source.loopStart = tone.start;
-          source.loopEnd = tone.end;
-          source.start(start, tone.start);
-          source.stop(start + dur);
-        } else {
-          fade.gain.value = 0;
-          source.start(start, 0, dur);
-        }
-      } else {
-        source.start(start, srcStart, dur);
-      }
-
-      session.segments.push({ srcStart, srcEnd, outStart: start });
-      session.sources.push(source);
-    }
-    return t0 + length;
-  }
-
-  /**
-   * Other speeds: the stretcher plays the edited signal straight through.
-   *
-   * Its schedule() keeps only one pending change — each call drops every change
-   * still in the future — so it can't be told up front to jump over each cut.
-   * Instead the kept pieces are rendered joined (same crossfades as above) and
-   * streamed to it in chunks just ahead of its read position, which also keeps
-   * a long recording from being copied into the audio thread all at once.
-   */
-  private playStretched(session: Session, node: StretchNode, kept: Kept[], t0: number): number {
-    const { placed, length } = layOut(kept);
-    const rate = session.rate;
-    session.segments = placed.map((p) => ({ srcStart: p.srcStart, srcEnd: p.srcEnd, outStart: t0 + p.at / rate }));
-
-    let queued = Math.min(length, STRETCH_CHUNK_S);
-    void node.dropBuffers();
-    this.feed(node, placed, 0, queued);
-    node.schedule({ output: t0, active: true, input: 0, rate });
-    void node.setUpdateInterval(STRETCH_POLL_S, (inputTime) => {
-      if (this.session !== session || queued >= length || inputTime < queued - STRETCH_LOW_WATER_S) return;
-      const next = Math.min(length, queued + STRETCH_CHUNK_S);
-      this.feed(node, placed, queued, next);
-      queued = next;
-      void node.dropBuffers(Math.max(0, inputTime - 1));
-    });
-    node.connect(session.gain);
-    return t0 + length / rate;
-  }
-
-  /** Render seconds [from, to) of the edited signal and append it to the stretcher's input. */
-  private feed(node: StretchNode, placed: Placed[], from: number, to: number): void {
-    const buffer = this.buffer;
-    if (!buffer) return;
-    const sr = buffer.sampleRate;
-    const a  = Math.round(from * sr);
-    const b  = Math.round(to * sr);
-    const out = Array.from({ length: buffer.numberOfChannels }, () => new Float32Array(Math.max(0, b - a)));
-    for (const p of placed) {
-      const start = Math.round(p.at * sr);
-      const len   = Math.round(lengthOf(p) * sr);
-      const lo = Math.max(a, start);
-      const hi = Math.min(b, start + len);
-      if (lo >= hi) continue;
-      const tone = p.fill?.tone;
-      if (p.fill && !tone) continue; // silence
-      const src  = Math.round(p.srcStart * sr) - start;
-      // Room tone: frame i of the pause reads tone frame (i mod its length).
-      const toneStart = tone ? Math.round(tone.start * sr) : 0;
-      const toneLen   = tone ? Math.max(1, Math.round((tone.end - tone.start) * sr)) : 1;
-      const fIn  = Math.round(p.xIn * sr);
-      const fOut = Math.round(p.xOut * sr);
-      out.forEach((channel, c) => {
-        const data = buffer.getChannelData(c);
-        for (let f = lo; f < hi; f++) {
-          const i = f - start;
-          let g = 1;
-          if (i < fIn) g = Math.sin(((i + 0.5) / fIn) * (Math.PI / 2));
-          else if (i >= len - fOut) g = Math.cos(((i - (len - fOut) + 0.5) / fOut) * (Math.PI / 2));
-          channel[f - a] += (tone ? data[toneStart + (i % toneLen)] : data[src + f]) * g;
-        }
+    session.segments = plan.pieces.filter((p) => (p.outputStartMs + p.durationMs) * sr / 1000 > from && p.outputStartMs * sr / 1000 < to)
+      .map((p) => {
+        const offset = Math.max(0, from / sr - p.outputStartMs / 1000);
+        return { srcStart: (p.sourceStartMs / 1000) + (p.pause ? 0 : offset), srcEnd: p.sourceEndMs / 1000,
+          outStart: t0 + Math.max(0, p.outputStartMs / 1000 - from / sr) / session.rate };
       });
+    if (loopRange) {
+      const length = (loopTo - loopFrom) / sr;
+      const offset = (from - loopFrom) / sr;
+      if (stretch) {
+        stretch.schedule({ output: t0, active: true, input: offset, rate, loopStart: 0, loopEnd: length });
+        stretch.connect(gain);
+      } else {
+        const source = this.ctx.createBufferSource();
+        source.buffer = loopBuffer; source.loop = true; source.loopStart = 0; source.loopEnd = length;
+        source.connect(gain); session.sources.push(source); source.start(t0, offset);
+      }
+      return;
     }
-    // Transfer, don't copy: the chunk is ours alone.
-    void node.addBuffers(out, out.map((channel) => channel.buffer));
+    let queued = from;
+    if (stretch) {
+      const feed = (end: number) => {
+        const out = queued === from ? firstChunk : renderPlan(plan, channels, sr, queued, end);
+        void stretch.addBuffers(out, out.map((c) => c.buffer));
+        queued = end;
+      };
+      void stretch.dropBuffers();
+      feed(Math.min(to, from + chunk));
+      stretch.schedule({ output: t0, active: true, input: 0, rate, loopStart: 0, loopEnd: 0 });
+      void stretch.setUpdateInterval(STRETCH_POLL_S, (inputTime) => {
+        if (this.session !== session || queued >= to || inputTime < (queued - from) / sr - STRETCH_LOW_WATER_S) return;
+        feed(Math.min(to, queued + chunk));
+        void stretch.dropBuffers(Math.max(0, inputTime - 1));
+      });
+      stretch.connect(gain);
+      session.endTimer = setTimeout(() => { if (this.session === session) this.finish(); },
+        Math.max(0, (t0 + (to - from) / sr / rate - this.ctx.currentTime) * 1000) + 20);
+    } else {
+      // Keep two chunks scheduled on the audio clock. The native `ended`
+      // event replenishes them even when animation/background timers throttle.
+      // Both 1× and stretched playback use the same PCM renderer as export.
+      const enqueue = () => {
+        if (this.session !== session || queued >= to) return;
+        const start = queued, end = Math.min(to, start + chunk);
+        const out = start === from ? firstChunk : renderPlan(plan, channels, sr, start, end);
+        const buffer = this.ctx.createBuffer(channels.length, end - start, sr);
+        out.forEach((data, c) => buffer.copyToChannel(data, c));
+        const source = this.ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(gain);
+        session.sources.push(source);
+        source.onended = () => {
+          session.sources = session.sources.filter((s) => s !== source);
+          source.disconnect();
+          if (this.session !== session) return;
+          if (end === to) this.finish(); else enqueue();
+        };
+        source.start(t0 + (start - from) / sr);
+        queued = end;
+      };
+      enqueue();
+      enqueue();
+    }
   }
 
   private stopSession(): void {
@@ -582,6 +448,7 @@ export class EditPlayer {
     const range = this.range;
     this.range = null;
     this.position = range ? range.end : this.duration;
+    this.outputPosition = null;
     if (!this.paused) {
       this.paused = true;
       this.emit('pause');

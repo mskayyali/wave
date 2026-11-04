@@ -6,6 +6,7 @@ import { findPhrase } from './textSearch';
 import { RHYTHMS, shortenPauses, type Rhythm } from './pauses';
 import { EQ_PRESETS, type EqAmount } from './eq';
 import { findPreset, PRESET_IDS } from './audioFormats';
+import type { AgentEditSnapshot } from './agentTransitions';
 import { describeEnhancement } from '../components/editor/EnhancePanel';
 import type { EnhanceOptions } from '../hooks/useEnhancement';
 
@@ -85,14 +86,79 @@ function list(args: Args, key: string): Args[] {
 function wordsIn(ranges: Args[], count: number): number[] {
   const out = new Set<number>();
   for (const r of ranges) {
-    const from = Math.round(num(r, 'from'));
-    const to   = Math.round(num(r, 'to', from));
+    const from = num(r, 'from');
+    const to = num(r, 'to', from);
+    if (!Number.isInteger(from) || !Number.isInteger(to)) throw new Error('Word numbers must be integers.');
     if (from < 0 || to >= count || to < from) {
       throw new Error(`Word range ${from}–${to} is outside the transcript (words 0–${count - 1}).`);
     }
     for (let n = from; n <= to; n++) out.add(n);
   }
   return [...out].sort((a, b) => a - b);
+}
+
+function boolean(args: Args, key: string, fallback = false): boolean {
+  if (args[key] === undefined) return fallback;
+  if (typeof args[key] !== 'boolean') throw new Error(`"${key}" must be true or false.`);
+  return args[key] as boolean;
+}
+
+function readyToEdit(api: EditorAgentApi, args: Args = {}): AgentEditSnapshot {
+  const state = api.editingState();
+  if (!state.ready) throw new Error('Wave is still preparing audio analysis. Wait until playback is ready, then plan the edit again.');
+  if (args.expected_revision !== undefined && (typeof args.expected_revision !== 'string' || !args.expected_revision.trim())) throw new Error('expected_revision must be a non-empty string.');
+  const expected = str(args, 'expected_revision', false);
+  if (expected && expected !== state.revision) throw new Error('The editor changed since this edit was planned. Run plan_edit again before applying it.');
+  return state;
+}
+
+function timeRanges(args: Args, api: EditorAgentApi, key: string): { startMs: number; endMs: number }[] {
+  const state = api.editingState();
+  const ranges = list(args, key).map((r) => {
+    const startMs = num(r, 'start') * 1000, endMs = num(r, 'end') * 1000;
+    if (startMs < 0 || endMs > state.sourceDurationMs || endMs - startMs < 5) {
+      throw new Error(`${seconds(startMs)}–${seconds(endMs)} s isn't a valid range (original audio 0–${seconds(state.sourceDurationMs)} s; minimum cut 0.005 s).`);
+    }
+    return { startMs, endMs };
+  });
+  const overlaps = api.words().filter((w) => !w.cut && ranges.some((r) => r.startMs < w.endMs && r.endMs > w.startMs));
+  if (overlaps.length && !boolean(args, 'allow_word_trim')) {
+    throw new Error(`This time cut overlaps kept words ${overlaps.slice(0, 12).map((w) => `${w.n} "${w.text}"`).join(', ')}. Use cut_words for spoken content. Set allow_word_trim=true only for an intentional exact trim of speech; it bypasses word protection.`);
+  }
+  // Validate the option even when no words overlap.
+  boolean(args, 'allow_word_trim');
+  return ranges;
+}
+
+function transitionNotice(state: AgentEditSnapshot): string {
+  const review = state.transitions.filter((t) => t.reviewReasons.length > 0);
+  const partial = state.cuts.filter((c) => c.partialWords.length > 0);
+  const trimmed = partial.length ? ` ${plural(partial.length, 'cut')} partly trims speech word spans.` : '';
+  return trimmed + (review.length
+    ? ` ${plural(review.length, 'transition')} flagged for listening review. Use get_transitions with review_only=true; the user can audition joins in Wave with C. No listening check has been performed.`
+    : ` Resolved joins use the shared playback/export plan.${partial.length ? ' Inspect partial-word cuts with get_transitions.' : ' No heuristic review flags; this is not a listening check.'}`);
+
+}
+
+function describePlan(state: AgentEditSnapshot, args: Args): string {
+  const from = num(args, 'from_transition', 0), limit = num(args, 'limit', 50);
+  if (!Number.isInteger(from) || from < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('from_transition must be a non-negative integer; limit must be 1–100.');
+  }
+  const rows = boolean(args, 'review_only') ? state.transitions.filter((t) => t.reviewReasons.length > 0) : state.transitions;
+  const precise = (ms: number) => (ms / 1000).toFixed(6);
+  return [
+    `Revision: ${state.revision}`,
+    `Analysis ready: ${state.ready}. Original duration ${precise(state.sourceDurationMs)} s; edited duration ${precise(state.durationMs)} s.`,
+    'Source times are ORIGINAL seconds; output times are EDITED seconds; fades are milliseconds. These are resolved boundaries, not acoustic certification.',
+    `${state.cuts.length} cuts; ${state.transitions.length} transitions; ${state.transitions.filter((t) => t.reviewReasons.length).length} flagged for listening review.`,
+    ...state.cuts.slice(0, 50).map((c, i) => `Cut ${i}: ${precise(c.startMs)}–${precise(c.endMs)} s${c.manualBoundary ? '; manual boundary preserved' : ''}${c.partialWords.length ? `; partly trims words ${c.partialWords.join(', ')}` : ''}`),
+    ...(state.cuts.length > 50 ? ['Cut-range list truncated to 50; transition rows can be paged.'] : []),
+    ...rows.slice(from, from + limit).map((t) =>
+      `Join ${t.number} (${t.kind}): source ${precise(t.sourceLeftMs)} → ${precise(t.sourceRightMs)} s; output ${precise(t.outputStartMs)}–${precise(t.outputEndMs)} s; fade ${t.fadeMs.toFixed(3)} ms; words ${t.beforeWord ?? 'none'} → ${t.afterWord ?? 'none'}${t.manualBoundary ? '; manual boundary preserved' : ''}${t.reviewReasons.length ? `; REVIEW: ${t.reviewReasons.join(' ')}` : ''}`),
+    `Showing ${Math.min(from, rows.length)}–${Math.min(from + limit, rows.length)} of ${rows.length} matching joins (from_transition is a row offset).`,
+    'ASR confidence describes transcription uncertainty, not boundary accuracy. Preserve manual trims; do not widen cuts or fades to hide a flagged join without evidence.',
+  ].join('\n');
 }
 
 // ─── Projects ─────────────────────────────────────────────────────────────────
@@ -217,6 +283,8 @@ const TOOLS: Record<string, (args: Args, ctx: AgentContext) => Promise<string>> 
         : `${enh.on ? 'on' : 'made, switched off'}: ${describeEnhancement(enh.applied!)}`}`,
       `Clean-up model (DPDFNet): ${enh.ready.dpdfnet ? 'downloaded' : 'not downloaded (an EQ and loudness still work)'}`,
     );
+    const state = api.editingState();
+    lines.push(`Audio analysis: ${state.ready ? 'ready' : 'preparing'}. Edit revision: ${state.revision}.${transitionNotice(state)}`);
     return lines.join('\n');
   },
 
@@ -307,48 +375,68 @@ const TOOLS: Record<string, (args: Args, ctx: AgentContext) => Promise<string>> 
     ].join('\n');
   },
 
+  async get_transitions(args, ctx) {
+    const api = await editorFor(args, ctx);
+    return describePlan(api.editingState(), args);
+  },
+
+  async plan_edit(args, ctx) {
+    const api = await editorFor(args, ctx);
+    readyToEdit(api);
+    const hasWords = args.word_ranges !== undefined, hasTime = args.time_ranges !== undefined;
+    if (hasWords === hasTime) throw new Error('Provide exactly one of word_ranges or time_ranges.');
+    const words = hasWords ? wordsIn(list(args, 'word_ranges'), api.words().length).filter((n) => !api.words()[n].cut) : [];
+    const ranges = hasTime ? timeRanges(args, api, 'time_ranges') : [];
+    const planned = api.planEdit(words, ranges);
+    return 'DRY RUN: no edits, playback or selection changes. Apply with cut_words or cut_time using expected_revision from this report.\n'
+      + describePlan(planned, args);
+  },
+
   async cut_words(args, ctx) {
     const api = await editorFor(args, ctx);
+    readyToEdit(api, args);
     const words = api.words();
     const chosen = wordsIn(list(args, 'ranges'), words.length).filter((n) => !words[n].cut);
     if (chosen.length === 0) return 'Those words are already cut.';
     const summary = str(args, 'label', false) ?? `Cut ${plural(chosen.length, 'word')}`;
     api.group(summary, ctx.agent, (e) => e.cutWords(chosen));
     const after = await done(api, ctx, summary);
-    return `Cut ${plural(chosen.length, 'word')}. ${lengthNow(after)}`;
+    return `Cut ${plural(chosen.length, 'word')}. ${lengthNow(after)}${transitionNotice(after.editingState())}`;
   },
 
   async restore_words(args, ctx) {
     const api = await editorFor(args, ctx);
+    readyToEdit(api, args);
     const words = api.words();
-    const chosen = wordsIn(list(args, 'ranges'), words.length).filter((n) => words[n].cut);
+    const chosen = wordsIn(list(args, 'ranges'), words.length).filter((n) => words[n].cut || words[n].partCut);
     if (chosen.length === 0) return 'None of those words are cut.';
     api.restore(chosen);
-    const after = await done(api, ctx, `Restored ${plural(chosen.length, 'word')}`);
-    return `Restored ${plural(chosen.length, 'word')}. ${lengthNow(after)}`;
+    await api.settled();
+    const after = openEditor(api.projectId) ?? api;
+    const restored = chosen.filter((n) => !after.words()[n].cut && !after.words()[n].partCut).length;
+    if (restored === 0) throw new Error('Those words still have audio removed. No words were restored.');
+    activity.announce(`${ctx.agent}: restored ${plural(restored, 'word')}`, api.projectId);
+    return `Restored ${plural(restored, 'word')}. ${lengthNow(after)}`
+      + (restored < chosen.length ? ` ${chosen.length - restored} still have audio removed.` : '')
+      + ' Restoration is one undoable step.';
   },
 
   async cut_time(args, ctx) {
     const api = await editorFor(args, ctx);
-    const ranges = list(args, 'ranges').map((r) => {
-      const startMs = num(r, 'start') * 1000, endMs = num(r, 'end') * 1000;
-      if (startMs < 0 || endMs > api.durationMs + 1 || endMs - startMs < 5) {
-        throw new Error(`${seconds(startMs)}–${seconds(endMs)} s isn't a stretch of the audio (0–${seconds(api.durationMs)} s).`);
-      }
-      return { startMs, endMs };
-    });
+    readyToEdit(api, args);
+    const ranges = timeRanges(args, api, 'ranges');
     const summary = str(args, 'label', false) ?? `Cut ${plural(ranges.length, 'stretch', 'stretches')} of audio`;
     api.group(summary, ctx.agent, (e) => ranges.forEach((r) => e.cutTime(r.startMs, r.endMs)));
     const after = await done(api, ctx, summary);
-    const totalMs = ranges.reduce((s, r) => s + r.endMs - r.startMs, 0);
-    return `Cut ${plural(ranges.length, 'stretch', 'stretches')}, ${seconds(totalMs)} s. ${lengthNow(after)}`;
+    return `Cut ${plural(ranges.length, 'stretch', 'stretches')}. ${lengthNow(after)}${transitionNotice(after.editingState())}`;
   },
 
   async correct_words(args, ctx) {
     const api = await editorFor(args, ctx);
     const words = api.words();
     const fixes = list(args, 'corrections').map((c) => {
-      const n = Math.round(num(c, 'word'));
+      const n = num(c, 'word');
+      if (!Number.isInteger(n)) throw new Error('Word numbers must be integers.');
       if (n < 0 || n >= words.length) throw new Error(`There's no word ${n} (words 0–${words.length - 1}).`);
       return { n, text: str(c, 'text')! };
     }).filter((c) => c.text !== words[c.n].text);
@@ -361,8 +449,10 @@ const TOOLS: Record<string, (args: Args, ctx: AgentContext) => Promise<string>> 
 
   async shorten_pauses(args, ctx) {
     const api = await editorFor(args, ctx);
+    readyToEdit(api);
     const longerMs = num(args, 'longer_than', 1) * 1000;
     const keepMs = num(args, 'keep', 0.5) * 1000;
+    if (longerMs < 200 || keepMs < 50) throw new Error('longer_than must be at least 0.2 s; keep must be at least 0.05 s.');
     if (keepMs >= longerMs) throw new Error('"keep" must be shorter than "longer_than".');
     const todo = pauses(api, longerMs).filter((p) => p.untouched)
       .map((p) => ({ startMs: p.startMs + keepMs / 2, endMs: p.endMs - keepMs / 2 }));
@@ -371,11 +461,12 @@ const TOOLS: Record<string, (args: Args, ctx: AgentContext) => Promise<string>> 
     api.group(summary, ctx.agent, (e) => todo.forEach((r) => e.cutTime(r.startMs, r.endMs)));
     const after = await done(api, ctx, summary);
     const savedMs = todo.reduce((s, r) => s + r.endMs - r.startMs, 0);
-    return `${summary}, saving ${seconds(savedMs)} s. ${lengthNow(after)}`;
+    return `${summary}, removing ${seconds(savedMs)} s of source audio. ${lengthNow(after)}${transitionNotice(after.editingState())}`;
   },
 
   async tighten_pauses(args, ctx) {
     const api = await editorFor(args, ctx);
+    readyToEdit(api);
     const rhythm = (str(args, 'rhythm', false) ?? 'natural') as Rhythm['id'];
     const r = RHYTHMS.find((x) => x.id === rhythm);
     if (!r) throw new Error('"rhythm" must be tight, natural or relaxed.');
@@ -384,11 +475,12 @@ const TOOLS: Record<string, (args: Args, ctx: AgentContext) => Promise<string>> 
     api.group(label, ctx.agent, (e) => { result = e.tightenPauses(r.id); });
     if (result.count === 0) return `No pauses run longer than the ${r.label.toLowerCase()} rhythm allows (${seconds(r.sentence)} s between sentences, ${seconds(r.within)} s within one).`;
     const after = await done(api, ctx, `${label}: ${plural(result.count, 'pause')}`);
-    return `Shortened ${plural(result.count, 'pause')} to the ${r.label.toLowerCase()} rhythm, saving ${seconds(result.savedMs)} s. ${lengthNow(after)}`;
+    return `Shortened ${plural(result.count, 'pause')} to the ${r.label.toLowerCase()} rhythm, removing ${seconds(result.savedMs)} s of source audio. ${lengthNow(after)}${transitionNotice(after.editingState())}`;
   },
 
   async add_pauses(args, ctx) {
     const api = await editorFor(args, ctx);
+    readyToEdit(api);
     const words = api.words();
     const pauses = list(args, 'pauses').map((p) => {
       const after = num(p, 'after_word');
@@ -401,7 +493,7 @@ const TOOLS: Record<string, (args: Args, ctx: AgentContext) => Promise<string>> 
     const label = str(args, 'label', false) ?? `Added ${plural(pauses.length, 'pause')}`;
     api.group(label, ctx.agent, (e) => pauses.forEach((p) => e.addPause(p.after, p.ms)));
     const after = await done(api, ctx, label);
-    return `${label}: ${pauses.map((p) => `${seconds(p.ms)} s after word ${p.after} "${words[p.after].text}"`).join(', ')}. ${lengthNow(after)}`;
+    return `${label}: ${pauses.map((p) => `${seconds(p.ms)} s after word ${p.after} "${words[p.after].text}"`).join(', ')}. ${lengthNow(after)}${transitionNotice(after.editingState())}`;
   },
 
   async enhance_audio(args, ctx) {
@@ -482,7 +574,7 @@ const TOOLS: Record<string, (args: Args, ctx: AgentContext) => Promise<string>> 
   async undo(args, ctx) {
     const api = await editorFor(args, ctx);
     const label = api.undo(str(args, 'edit_id', false));
-    if (label === null) throw new Error(args.edit_id ? `No edit "${args.edit_id}" (see list_edits).` : 'There\'s no agent edit to undo.');
+    if (label === null) throw new Error(args.edit_id ? `No edit "${args.edit_id}" (see list_edits).` : 'There\'s no edit to undo.');
     const after = await done(api, ctx, `Undid "${label}"`);
     return `Undid "${label}". ${lengthNow(after)}`;
   },
@@ -506,6 +598,7 @@ const TOOLS: Record<string, (args: Args, ctx: AgentContext) => Promise<string>> 
 
   async export_audio(args, ctx) {
     const api = await editorFor(args, ctx);
+    readyToEdit(api);
     // A preset ("mp3-192") or a format at its standard preset ("flac").
     const chosen = findPreset(str(args, 'format', false) ?? 'mp3');
     if (!chosen) throw new Error(`"format" must be one of ${PRESET_IDS.join(', ')}.`);

@@ -8,6 +8,8 @@ declare module 'signalsmith-stretch' {
     /** Position in the input buffer, seconds. */
     input?: number;
     rate?: number;
+    loopStart?: number;
+    loopEnd?: number;
     semitones?: number;
   }
 

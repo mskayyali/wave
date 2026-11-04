@@ -10,6 +10,17 @@
 # Needs the updater's private key (made once with
 # `bunx tauri signer generate -w ~/.tauri/wave-updater.key`). Its password is
 # read from TAURI_SIGNING_PRIVATE_KEY_PASSWORD, or asked for. Never commit the key.
+#
+# The app and the DMG are signed with a Developer ID and notarized by Apple, so
+# Wave opens without a warning. That needs:
+#   - the Developer ID Application certificate in the login keychain (Xcode →
+#     Settings → Accounts → Manage Certificates → + → Developer ID Application);
+#   - an App Store Connect API key (Users and Access → Integrations → Team Keys,
+#     Developer access), its file at ~/.appstoreconnect/private_keys/AuthKey_<KEY ID>.p8,
+#     and APPLE_API_KEY=<KEY ID> APPLE_API_ISSUER=<Issuer ID> in the environment.
+#
+# WAVE_UNNOTARIZED=1 keeps the existing Gatekeeper "Open Anyway" flow.
+# WAVE_PUBLISH=1 skips the terminal confirmation when publication is already authorized.
 set -euo pipefail
 
 VERSION="${1:-}"
@@ -24,6 +35,24 @@ die() { echo "release: $*" >&2; exit 1; }
 [[ -f "$KEY" ]] || die "no updater key at $KEY (make one with: bunx tauri signer generate -w $KEY)"
 command -v gh >/dev/null || die "the GitHub CLI (gh) is needed"
 command -v bun >/dev/null || die "bun is needed"
+
+# Developer ID and notarization are the default. A deliberately unnotarized
+# release still requires the existing updater key: installed apps verify it.
+if [[ "${WAVE_UNNOTARIZED:-0}" == "1" ]]; then
+  IDENTITY="-"
+  echo "Building with ad-hoc app signing; users will need macOS Open Anyway."
+else
+IDENTITY="${APPLE_SIGNING_IDENTITY:-$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)}"
+[[ -n "$IDENTITY" ]] || die "no Developer ID Application certificate in the keychain (Xcode → Settings → Accounts → Manage Certificates → + → Developer ID Application)"
+[[ -n "${APPLE_API_KEY:-}" && -n "${APPLE_API_ISSUER:-}" ]] \
+  || die "set APPLE_API_KEY (the key's ID) and APPLE_API_ISSUER (the Issuer ID), from App Store Connect → Users and Access → Integrations"
+APPLE_API_KEY_PATH="${APPLE_API_KEY_PATH:-$HOME/.appstoreconnect/private_keys/AuthKey_$APPLE_API_KEY.p8}"
+[[ -f "$APPLE_API_KEY_PATH" ]] || die "no API key file at $APPLE_API_KEY_PATH"
+export APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH
+NOTARY=(--key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER")
+xcrun notarytool history "${NOTARY[@]}" >/dev/null 2>&1 \
+  || die "Apple's notary service didn't accept the API key: check APPLE_API_KEY, APPLE_API_ISSUER and the key file"
+fi
 
 cd "$(dirname "$0")/.."
 [[ "$(git branch --show-current)" == "main" ]] || die "release from main"
@@ -57,7 +86,7 @@ if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD+set}" ]]; then
 fi
 export TAURI_SIGNING_PRIVATE_KEY="$KEY" TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 
-echo "Wave $CURRENT → $VERSION"
+echo "Wave $CURRENT → $VERSION, signed by $IDENTITY"
 
 # 1. The version, in the three places it lives.
 node -e '
@@ -71,12 +100,37 @@ node -e '
 (cd src-tauri && cargo update -q -p wave --precise "$VERSION" 2>/dev/null || cargo metadata -q --format-version 1 >/dev/null)
 
 # 2. Build: the app, the DMG, and the update (Wave.app.tar.gz and its signature).
-CI=true bunx tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}'
+# Tauri signs the app with the Developer ID and the hardened runtime (which
+# notarization requires), has Apple notarize it, staples the ticket, and only
+# then packs the DMG and the update, so both carry the notarized app.
+CONFIG=$(node -p 'JSON.stringify({ bundle: { createUpdaterArtifacts: true, macOS: { signingIdentity: process.argv[1], hardenedRuntime: process.argv[2] !== "1" } } })' "$IDENTITY" "${WAVE_UNNOTARIZED:-0}")
+CI=true bunx tauri build --config "$CONFIG"
 BUNDLE=src-tauri/target/release/bundle
+APP="$BUNDLE/macos/Wave.app"
 DMG="$BUNDLE/dmg/Wave_${VERSION}_aarch64.dmg"
 UPDATE="$BUNDLE/macos/Wave.app.tar.gz"
 [[ -f "$DMG" && -f "$UPDATE" && -f "$UPDATE.sig" ]] || die "the build didn't produce the DMG and the signed update"
-codesign --verify --deep --strict "$BUNDLE/macos/Wave.app" || die "the app's signature doesn't verify"
+codesign --verify --deep --strict "$APP" || die "the app's signature doesn't verify"
+if [[ "${WAVE_UNNOTARIZED:-0}" != "1" ]]; then
+codesign -dv "$APP" 2>&1 | grep -q '^CodeDirectory.*flags=.*runtime' || die "the app wasn't signed with the hardened runtime"
+xcrun stapler validate -q "$APP" || die "the app has no notarization ticket: did Tauri notarize it? (its log says why not)"
+spctl --assess --type execute "$APP" || die "Gatekeeper refuses the app"
+# The hardened runtime loads only libraries signed by the same team: LAME must
+# be, or MP3 export fails.
+TEAM=$(codesign -dv "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')
+LAME_TEAM=$(codesign -dv "$APP/Contents/Frameworks/libmp3lame.0.dylib" 2>&1 | sed -n 's/^TeamIdentifier=//p')
+[[ -n "$TEAM" && "$TEAM" == "$LAME_TEAM" ]] || die "LAME isn't signed by the app's team ($TEAM), so MP3 export would fail"
+
+# The DMG is notarized too, and the ticket stapled to it, so it opens without a
+# warning even offline.
+codesign --verify "$DMG" 2>/dev/null || codesign --force --timestamp --sign "$IDENTITY" "$DMG"
+echo "Notarizing the DMG (usually a few minutes)…"
+SUBMISSION=$(xcrun notarytool submit "$DMG" "${NOTARY[@]}" --wait --output-format json)
+STATUS=$(node -p 'JSON.parse(process.argv[1]).status' "$SUBMISSION")
+[[ "$STATUS" == "Accepted" ]] || die "Apple didn't notarize the DMG ($STATUS). Why: xcrun notarytool log $(node -p 'JSON.parse(process.argv[1]).id' "$SUBMISSION") --key … --key-id … --issuer …"
+xcrun stapler staple -q "$DMG"
+spctl --assess --type open --context context:primary-signature "$DMG" || die "Gatekeeper refuses the DMG"
+fi
 
 # 3. latest.json: what installed copies read to find the update.
 OUT="$BUNDLE/release"
@@ -104,8 +158,7 @@ SHA=$(shasum -a 256 "$OUT/Wave_${VERSION}_aarch64.dmg" | cut -d' ' -f1)
 Wave runs on Macs with Apple Silicon (M1 or later) and macOS 13.4 or later.
 
 1. Open \`Wave_${VERSION}_aarch64.dmg\` and drag Wave to Applications.
-2. Wave isn't notarized by Apple yet, so the first time, macOS says it can't verify it. Click **Done**, then open **System Settings → Privacy & Security** and click **Open Anyway**. Or, in Terminal: \`xattr -dr com.apple.quarantine /Applications/Wave.app\`
-3. In Wave's Settings, download **Transcription** (1.6 GB).
+2. Open Wave and choose **Whisper** (1.6 GB) or **Parakeet v3** (681 MB) in Settings.
 
 Already using Wave 1.1 or later? It offers this update by itself.
 
@@ -114,8 +167,30 @@ MP3 export uses LAME 3.100, bundled as a separate library under the LGPL. Its so
 SHA-256 of the DMG: \`$SHA\`
 INSTALL
 } > "$OUT/release-notes.md"
+if [[ "${WAVE_UNNOTARIZED:-0}" == "1" ]]; then
+  cat >> "$OUT/release-notes.md" <<'INSTALL'
 
-# 4. Commit, tag, push, publish.
+### First launch on macOS
+
+This release has a signed in-app update but is not notarized by Apple. If macOS blocks the first launch, open System Settings → Privacy & Security and choose Open Anyway, then confirm.
+INSTALL
+fi
+
+# 4. Try it, then commit, tag, push, publish.
+echo
+if [[ "${WAVE_UNNOTARIZED:-0}" == "1" ]]; then
+  echo "Built with signed updater (not notarized): $OUT"
+else
+  echo "Built and notarized: $OUT"
+fi
+echo "Try $OUT/Wave_${VERSION}_aarch64.dmg now if you like (open it, drag Wave to Applications, open it)."
+if [[ "${WAVE_PUBLISH:-0}" == "1" ]]; then ANSWER=y;
+else read -r -p "Publish Wave $VERSION? [y/N] " ANSWER; fi
+if [[ ! "$ANSWER" =~ ^[yY] ]]; then
+  git checkout -- package.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
+  echo "Not published. The build stays in $OUT, and the version is back at $CURRENT."
+  exit 0
+fi
 git add package.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
 git commit -q -m "Wave $VERSION"
 git tag "v$VERSION"

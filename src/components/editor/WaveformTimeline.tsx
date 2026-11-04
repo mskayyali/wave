@@ -1,6 +1,10 @@
 import { useRef, useCallback, useState, useEffect } from 'react';
 import { Select_01 as CursorIcon, Cut, Repeat, TextSelection, ZoomIn, ZoomOut, ZoomArea } from '@carbon/icons-react';
+import { PauseMarkers } from './PauseMarkers';
+import type { InsertedPause } from '../../lib/editPlan';
 import { PlaybackControls } from './PlaybackControls';
+import { wheelPixels, wheelZoom, visibleRulerTicks } from '../../lib/waveformGeometry';
+import type { TimeOp } from '../../lib/cutBoundaries';
 import type { useWaveform } from '../../hooks/useWaveform';
 import type { EnrichedWord } from '../../hooks/useTranscript';
 import { speakerColor, type SpeakerTurn } from '../../lib/speakers';
@@ -18,12 +22,6 @@ function fmtDur(ms: number): string {
   return s < 10 ? `${s.toFixed(1)}s` : `${Math.round(s)}s`;
 }
 
-/** Position to the millisecond: "5:35.123". */
-function fmtClock(ms: number): string {
-  const s = Math.max(0, ms) / 1000;
-  return `${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, '0')}`;
-}
-
 /** Selection length: "84 ms", "1.250s", "12.3s", "1:07.4". */
 function fmtLength(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)} ms`;
@@ -35,18 +33,6 @@ function fmtLength(ms: number): string {
 
 // ─── Time ruler ───────────────────────────────────────────────────────────────
 
-const NICE_STEPS_MS = [
-  500, 1_000, 2_000, 5_000, 10_000, 15_000, 30_000,
-  60_000, 120_000, 300_000, 600_000,
-  900_000, 1_800_000, 3_600_000,
-];
-
-function rulerStepMs(durationMs: number, zoomLevel: number): number {
-  const visibleMs = durationMs / zoomLevel;
-  const target    = visibleMs / 7;
-  return NICE_STEPS_MS.find((s) => s >= target) ?? NICE_STEPS_MS[NICE_STEPS_MS.length - 1];
-}
-
 function fmtRuler(ms: number): string {
   const totalSecs = ms / 1000;
   const h = Math.floor(totalSecs / 3600);
@@ -54,7 +40,7 @@ function fmtRuler(ms: number): string {
   const s = totalSecs % 60;
   // Show sub-second precision when zoomed in enough (step < 1s)
   if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(Math.floor(s)).padStart(2, '0')}`;
-  if (ms % 1000 !== 0) return `${m}:${String(Math.floor(s)).padStart(2, '0')}.${String(ms % 1000).padStart(3, '0').slice(0, 2)}`;
+  if (ms % 1000 !== 0) return `${m}:${String(Math.floor(s)).padStart(2, '0')}.${String(Math.round(ms % 1000)).padStart(3, '0')}`;
   return `${m}:${String(Math.floor(s)).padStart(2, '0')}`;
 }
 
@@ -66,17 +52,23 @@ interface WaveformRulerProps {
 }
 
 function WaveformRuler({ durationMs, currentMs, zoomLevel, wrapperScrollLeft }: WaveformRulerProps) {
-  if (durationMs <= 0) return null;
+  const rulerRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(1);
+  useEffect(() => {
+    const el = rulerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => setWidth(Math.max(1, el.clientWidth)));
+    setWidth(Math.max(1, el.clientWidth)); observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const pxPerMs = width * zoomLevel / Math.max(1, durationMs);
+  const ticks = durationMs > 0 ? visibleRulerTicks(wrapperScrollLeft / pxPerMs, (wrapperScrollLeft + width) / pxPerMs, durationMs) : [];
 
-  const step = rulerStepMs(durationMs, zoomLevel);
-  const ticks: number[] = [];
-  for (let t = 0; t < durationMs; t += step) ticks.push(t);
-
-  const cursorPct     = Math.min((currentMs / durationMs) * 100, 100);
+  const cursorPct     = Math.min((currentMs / Math.max(1, durationMs)) * 100, 100);
   const totalWidthPct = zoomLevel * 100;
 
   return (
-    <div className="wave-ruler" aria-hidden>
+    <div ref={rulerRef} className="wave-ruler" aria-hidden>
       <div
         className="wave-ruler__inner"
         style={{ width: `${totalWidthPct}%`, transform: `translateX(-${wrapperScrollLeft}px)` }}
@@ -322,16 +314,61 @@ function WaveWordTrack({
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
+function SelectionFields({ range, durationMs, disabled, onChange, onInvalidChange }: {
+  range: { startMs: number; endMs: number }; durationMs: number; disabled: boolean;
+  onChange: (range: { startMs: number; endMs: number }) => void;
+  onInvalidChange: (invalid: boolean) => void;
+}) {
+  const [draft, setDraft] = useState({ start: '', end: '', length: '' });
+  const [invalid, setInvalid] = useState<string | null>(null);
+  const cancelled = useRef(false);
+  const dirty = useRef(new Set<string>());
+  useEffect(() => {
+    setDraft({ start: (range.startMs / 1000).toFixed(3), end: (range.endMs / 1000).toFixed(3), length: ((range.endMs - range.startMs) / 1000).toFixed(3) });
+    setInvalid(null); onInvalidChange(false); dirty.current.clear();
+  }, [range.startMs, range.endMs, onInvalidChange]);
+  const commit = (field: 'start' | 'end' | 'length') => {
+    if (cancelled.current) { cancelled.current = false; return; }
+    if (!dirty.current.has(field)) return;
+    dirty.current.delete(field);
+    const ms = Math.round(Number(draft[field]) * 1000);
+    const next = { startMs: field === 'start' ? ms : range.startMs, endMs: field === 'end' ? ms : field === 'length' ? range.startMs + ms : range.endMs };
+    if (!draft[field].trim() || !Number.isFinite(ms) || next.startMs < 0 || next.endMs > durationMs || next.endMs - next.startMs < 1) { dirty.current.add(field); setInvalid(field); onInvalidChange(true); return; }
+    setInvalid(null); onInvalidChange(false); onChange(next);
+  };
+  return <>
+    {(['start', 'end', 'length'] as const).map(field => <label key={field}>
+      {field === 'length' ? 'Duration' : field === 'start' ? 'Start' : 'End'}
+      <input type="number" step="0.001" min={field === 'length' ? '0.001' : '0'} max={durationMs / 1000}
+        aria-label={`Selection ${field} in seconds`} aria-invalid={invalid === field} disabled={disabled} value={draft[field]}
+        onChange={e => { dirty.current.add(field); setDraft(d => ({ ...d, [field]: e.target.value })); }} onBlur={() => commit(field)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(field); }
+          if (e.key === 'Escape') { cancelled.current = true; dirty.current.clear(); setInvalid(null); onInvalidChange(false); setDraft({ start: (range.startMs / 1000).toFixed(3), end: (range.endMs / 1000).toFixed(3), length: ((range.endMs - range.startMs) / 1000).toFixed(3) }); e.currentTarget.blur(); }
+        }} /> s
+    </label>)}
+    {invalid && <span role="status">Use a valid range of at least 1 ms.</span>}
+  </>;
+}
+
 interface WaveformTimelineProps {
   waveform:           ReturnType<typeof useWaveform>;
+  canEdit: boolean;
+  pauses?: (InsertedPause & { id: string })[];
+  onPauseMenu: (id: string, x: number, y: number) => void;
   /** `free`: drawn with ⌥ held, so it shouldn't snap to word edges. */
   onSelectionChange:  (range: { startMs: number; endMs: number } | null, free?: boolean) => void;
   isLooping:          boolean;
   hasSelection:       boolean;
   onLoopToggle:       () => void;
+  onDeleteSelection: () => void;
+  onPreviewSelection: () => void;
+  onRevealSelection: () => void;
+  onJumpCut: (direction: 1 | -1) => void;
+  selectionKind?: 'words' | 'audio';
   onDeleteAtMs?:      (ms: number) => void;
   /** An edge of cut `index` was dragged on the waveform. */
-  onCutResize?:       (index: number, startMs: number, endMs: number) => void;
+  onCutResize?:       (cut: TimeOp, startMs: number, endMs: number) => void;
   /** Double-click on the waveform at `ms`. */
   onDoubleClickAt?:   (ms: number) => void;
   /** Right-click on the waveform at `ms`. */
@@ -367,7 +404,8 @@ interface WaveformTimelineProps {
 }
 
 export function WaveformTimeline({
-  waveform, onSelectionChange, isLooping, hasSelection, onLoopToggle,
+  waveform, canEdit, pauses = [], onPauseMenu, onSelectionChange, isLooping, hasSelection, onLoopToggle,
+  onDeleteSelection, onPreviewSelection, onRevealSelection, onJumpCut, selectionKind,
   onDeleteAtMs, onCutResize, onDoubleClickAt, onContextMenuAt, onHoverAt,
   words = [], deletedWordIndices = new Set(), selectionRange = null,
   referenceRange = null, snapToWords = false, onSnapToggle,
@@ -376,6 +414,7 @@ export function WaveformTimeline({
   panelHeight = 240, onPanelHeightChange,
 }: WaveformTimelineProps) {
   const [activeTool, setActiveTool] = useState<Tool>('cursor');
+  const [invalidSelection, setInvalidSelection] = useState(false);
   /** The selection while it's being drawn or resized (for the readout). */
   const [liveSelection, setLiveSelection] = useState<{ startMs: number; endMs: number } | null>(null);
   const resizeDragRef  = useRef<{ startY: number; startH: number } | null>(null);
@@ -385,7 +424,7 @@ export function WaveformTimeline({
     containerRef, isPlaying, currentMs, durationMs, rate, waveLoading,
     toggle, seek, setRate, handlers,
     zoomLevel, wrapperScrollLeft, setZoom, getWsScroll, setWsScroll,
-    forceRedraw, zoomToRange,
+    forceRedraw, zoomToRange, zoomBy, getView, following, setFollowing,
   } = waveform;
 
   // ── Waveform interactions (wavesurfer.js handles the pointer itself) ──────
@@ -396,7 +435,7 @@ export function WaveformTimeline({
   //  • right-click  → menu for the cut / selection / word / pause there
   handlers.current = {
     onClick: (ms) => {
-      if (activeTool === 'blade') onDeleteAtMs?.(ms);
+      if (activeTool === 'blade') { if (canEdit) onDeleteAtMs?.(ms); }
       else onSelectionChange(null);
     },
     onDoubleClick: (ms) => {
@@ -407,8 +446,9 @@ export function WaveformTimeline({
       setLiveSelection(null);
       if (range.endMs - range.startMs >= 1) onSelectionChange(range, free);
     },
-    onSelectionLive: setLiveSelection,
-    onCutResize,
+    onSelectionLive: range => setLiveSelection({ startMs: Math.round(range.startMs), endMs: Math.round(range.endMs) }),
+    onSelectionCancel: () => setLiveSelection(null),
+    onCutResize: (cut, start, end) => { setLiveSelection(null); onCutResize?.(cut, start, end); },
     onContextMenu: onContextMenuAt,
     onHover: onHoverAt,
   };
@@ -424,32 +464,29 @@ export function WaveformTimeline({
 
     function onWheel(e: WheelEvent) {
       e.preventDefault();
-      if (e.ctrlKey) {
-        // Trackpad pinch or Ctrl+scroll → zoom, keeping the time under the
-        // cursor fixed (as Audition and Audacity do).
+      if (e.target instanceof Element && e.target.closest('.wave-selection-controls')) return;
+      const tools = e.target instanceof Element ? e.target.closest<HTMLElement>('.wave-waveform-tools') : null;
+      if (tools && !e.ctrlKey && !e.metaKey && tools.scrollWidth > tools.clientWidth) {
+        tools.scrollLeft += wheelPixels(e.deltaX || e.deltaY, e.deltaMode, tools.clientWidth);
+        return;
+      }
+      const pixels = wheelPixels(e.deltaY, e.deltaMode, (el?.clientWidth ?? 1));
+      if (e.ctrlKey || e.metaKey) {
         const canvas = containerRef.current;
-        let anchorMs: number | null = null;
-        if (canvas && durationMs > 0) {
-          const rect     = canvas.getBoundingClientRect();
-          const pxPerSec = (rect.width * zoomLevelRef.current) / (durationMs / 1000);
-          anchorMs = ((getWsScroll() + (e.clientX - rect.left)) / pxPerSec) * 1000;
-        }
-        const delta = -e.deltaY * 0.005;
-        setZoom(zoomLevelRef.current * (1 + delta), anchorMs ?? 'auto');
+        const view = getView();
+        const anchorMs = canvas && view
+          ? (view.scroll + e.clientX - canvas.getBoundingClientRect().left) / view.pxPerSec * 1000 : 'auto';
+        zoomBy(wheelZoom(pixels), anchorMs);
       } else {
-        // Two-finger swipe → horizontal scroll.
-        const dx = e.deltaX !== 0 ? e.deltaX : e.deltaY;
-        setWsScroll(getWsScroll() + dx);
+        setWsScroll(getWsScroll() + wheelPixels(e.deltaX !== 0 ? e.deltaX : e.deltaY, e.deltaMode, el?.clientWidth ?? 1));
       }
     }
 
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setZoom, setWsScroll, getWsScroll, containerRef, durationMs]);
+  }, [zoomBy, getView, setWsScroll, getWsScroll, containerRef]);
 
-  const zoomLevelRef = useRef(zoomLevel);
-  zoomLevelRef.current = zoomLevel;
 
   // ── Resize handle (drag to change panel height) ───────────────────────────
   // Dragging the handle UP increases panel height (panel anchored at bottom,
@@ -463,6 +500,7 @@ export function WaveformTimeline({
   const handleResizeDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (e.button !== 0) return;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     resizeDragRef.current = { startY: e.clientY, startH: panelHeight };
   }, [panelHeight]);
@@ -485,6 +523,19 @@ export function WaveformTimeline({
     resizeRedrawRafRef.current = requestAnimationFrame(() => { forceRedraw(); });
   }, [forceRedraw]);
 
+  const cancelResize = useCallback(() => {
+    if (!resizeDragRef.current) return;
+    onPanelHeightChange?.(resizeDragRef.current.startH);
+    resizeDragRef.current = null;
+    cancelAnimationFrame(resizeRedrawRafRef.current);
+    resizeRedrawRafRef.current = requestAnimationFrame(forceRedraw);
+  }, [onPanelHeightChange, forceRedraw]);
+  useEffect(() => {
+    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape' && resizeDragRef.current) { e.preventDefault(); e.stopImmediatePropagation(); cancelResize(); } };
+    window.addEventListener('keydown', escape, true); window.addEventListener('blur', cancelResize);
+    return () => { cancelAnimationFrame(resizeRedrawRafRef.current); window.removeEventListener('keydown', escape, true); window.removeEventListener('blur', cancelResize); };
+  }, [cancelResize]);
+
   // ── Word track click → seek + select ─────────────────────────────────────
   const handleWordChipClick = useCallback((word: EnrichedWord) => {
     // onSelectionChange causes EditorPage's effect to seek to startMs,
@@ -493,22 +544,31 @@ export function WaveformTimeline({
   }, [onSelectionChange]);
 
   return (
-    <div ref={timelineRef} className="wave-timeline" style={{ height: panelHeight }}>
+    <div ref={timelineRef} tabIndex={0} aria-label="Waveform editor" className="wave-timeline" style={{ height: panelHeight }}>
       {/* ── Resize handle (drag up/down to expand/shrink the panel) ─────── */}
       <div
         className="wave-resize-handle"
         onPointerDown={handleResizeDown}
         onPointerMove={handleResizeMove}
         onPointerUp={handleResizeUp}
-        title="Drag to resize"
+        onPointerCancel={cancelResize}
+        onLostPointerCapture={cancelResize}
+        role="separator" tabIndex={0} aria-label="Waveform panel height" aria-orientation="horizontal"
+        aria-valuemin={140} aria-valuemax={600} aria-valuenow={Math.round(panelHeight)}
+        onKeyDown={e => {
+          if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); onPanelHeightChange?.(Math.max(140, Math.min(600, panelHeight + (e.key === 'ArrowUp' ? 10 : -10)))); requestAnimationFrame(forceRedraw); }
+        }}
+        title="Drag to resize; arrow keys adjust height"
       />
       {/* ── Toolbar ─────────────────────────────────────────────────────── */}
       <div className="wave-waveform-toolbar">
+        <div className="wave-waveform-tools">
         {(['cursor', 'blade'] as const).map((tool) => (
           <button
             key={tool}
             className={`wave-tool-btn${activeTool === tool ? ' wave-tool-btn--active' : ''}`}
-            title={tool === 'cursor' ? 'Cursor (select)' : 'Blade (cut)'}
+            title={tool === 'cursor' ? 'Cursor (select)' : 'Blade (remove word)'}
+            aria-label={tool === 'cursor' ? 'Selection tool' : 'Remove word tool'} aria-pressed={activeTool === tool}
             onClick={() => setActiveTool(tool)}
           >
             {tool === 'cursor' ? <CursorIcon size={14} /> : <Cut size={14} />}
@@ -531,7 +591,8 @@ export function WaveformTimeline({
         <button
           className={`wave-tool-btn${isLooping ? ' wave-tool-btn--active' : ''}${!hasSelection ? ' wave-tool-btn--disabled' : ''}`}
           title={hasSelection ? (isLooping ? 'Loop on — click to disable' : 'Loop selection') : 'Make a selection to enable loop'}
-          onClick={hasSelection ? onLoopToggle : undefined}
+          onClick={onLoopToggle}
+          disabled={!hasSelection || !waveform.audioReady} aria-label="Loop selection"
           aria-pressed={isLooping}
         >
           <Repeat size={14} />
@@ -542,7 +603,7 @@ export function WaveformTimeline({
         <button
           className="wave-tool-btn"
           title="Zoom out  (−)"
-          onClick={() => setZoom(zoomLevelRef.current / 1.5)}
+          onClick={() => zoomBy(1 / 1.5)} aria-label="Zoom out"
           disabled={zoomLevel <= 1}
         >
           <ZoomOut size={14} />
@@ -557,7 +618,8 @@ export function WaveformTimeline({
         <button
           className="wave-tool-btn"
           title="Zoom in  (+)"
-          onClick={() => setZoom(zoomLevelRef.current * 1.5)}
+          onClick={() => zoomBy(1.5)} aria-label="Zoom in"
+          disabled={zoomLevel >= waveform.getMaxZoom()}
         >
           <ZoomIn size={14} />
         </button>
@@ -565,7 +627,8 @@ export function WaveformTimeline({
         <button
           className={`wave-tool-btn${zoomTarget ? '' : ' wave-tool-btn--disabled'}`}
           title={zoomTarget ? 'Zoom to selection  (Z)' : 'Select something to zoom to it'}
-          onClick={zoomTarget ? () => zoomToRange(zoomTarget.startMs, zoomTarget.endMs) : undefined}
+          onClick={zoomTarget ? () => zoomToRange(zoomTarget.startMs, zoomTarget.endMs, true) : undefined}
+          disabled={!zoomTarget} aria-label="Toggle zoom to selection"
         >
           <ZoomArea size={14} />
         </button>
@@ -585,17 +648,25 @@ export function WaveformTimeline({
             {selectionLabel}
           </span>
         )}
-        {readout && (
-          <span
-            className="wave-selection-readout"
-            title={'Selection: start – end (length).\n'
-              + '⇧←/→ moves its end, ⌥⇧←/→ its start (10 ms; add ⌘ for 1 ms).\n'
-              + 'C previews it cut; ⌫ cuts exactly this.'}
-          >
-            {fmtClock(readout.startMs)} – {fmtClock(readout.endMs)}
-            <span className="wave-selection-readout__len">{fmtLength(readout.endMs - readout.startMs)}</span>
-          </span>
-        )}
+        <button className={`wave-tool-btn wave-tool-btn--text${following ? ' wave-tool-btn--active' : ''}`}
+          aria-pressed={following} onClick={() => setFollowing(!following)} title="Follow playback in text and waveform">Follow</button>
+        <button className="wave-tool-btn" aria-label="Previous cut" title="Previous cut (⌥↑)" onClick={() => onJumpCut(-1)}>‹</button>
+        <button className="wave-tool-btn" aria-label="Next cut" title="Next cut (⌥↓)" onClick={() => onJumpCut(1)}>›</button>
+        <button className="wave-tool-btn wave-tool-btn--text" disabled={!readout || invalidSelection || !canEdit} onClick={onPreviewSelection} title="Preview cut (C)">Preview</button>
+        <button className="wave-tool-btn wave-tool-btn--text" disabled={!readout} onClick={onRevealSelection} title="Show selection in text (F6 switches editor focus)">Text ↗</button>
+        <button className="wave-tool-btn wave-tool-btn--text" disabled={!hasSelection || invalidSelection || !canEdit} onClick={onDeleteSelection}>
+          {selectionKind === 'words' ? 'Delete words' : 'Cut audio'}
+        </button>
+
+        </div>
+      {readout && (
+        <div className="wave-selection-controls">
+          <span className="wave-selection-controls__kind">{selectionKind === 'words' && !liveSelection ? 'Words' : 'Exact audio'}</span>
+          <SelectionFields range={readout} durationMs={durationMs} disabled={!!liveSelection}
+            onChange={range => onSelectionChange(range, true)} onInvalidChange={setInvalidSelection} />
+          <span className="wave-selection-readout__len">{fmtLength(readout.endMs - readout.startMs)}</span>
+        </div>
+      )}
       </div>
 
       {/* ── Time ruler ──────────────────────────────────────────────────── */}
@@ -627,6 +698,7 @@ export function WaveformTimeline({
 
       {/* ── Waveform canvas + overlay ────────────────────────────────────── */}
       <div className="wave-waveform-wrapper">
+        <PauseMarkers pauses={pauses} durationMs={durationMs} zoomLevel={zoomLevel} scrollLeft={wrapperScrollLeft} onOpen={onPauseMenu} />
         <div
           ref={containerRef}
           className={`wave-waveform-canvas wave-waveform-canvas--${activeTool}`}

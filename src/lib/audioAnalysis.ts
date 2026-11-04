@@ -49,26 +49,3 @@ export function analyzeAudio(buffer: AudioBuffer): AudioAnalysis {
   }
   return { envelope, energy };
 }
-
-/**
- * The quietest moment (ms) within [aroundMs − beforeMs, aroundMs + afterMs], or
- * null when nothing there is clearly quieter (≥ 3 dB) than at `aroundMs` itself
- * — then the boundary is already as good a cut point as any nearby.
- */
-export function quietestPoint(
-  energy:   Float32Array,
-  aroundMs: number,
-  beforeMs: number,
-  afterMs:  number,
-): number | null {
-  const at   = (ms: number) => Math.min(energy.length - 1, Math.max(0, Math.floor(ms / ENERGY_FRAME_MS)));
-  const from = at(aroundMs - beforeMs);
-  const to   = at(aroundMs + afterMs);
-  let best = at(aroundMs);
-  for (let f = from; f <= to; f++) {
-    if (energy[f] < energy[best]) best = f;
-  }
-  // 3 dB ≈ a factor of √2 in RMS
-  if (energy[best] * Math.SQRT2 > energy[at(aroundMs)]) return null;
-  return best * ENERGY_FRAME_MS + ENERGY_FRAME_MS / 2;
-}

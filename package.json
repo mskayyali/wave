@@ -4,7 +4,9 @@
   "version": "1.1.0",
   "type": "module",
   "scripts": {
+    "setup:parakeet": "python3 scripts/setup-parakeet.py",
     "dev": "vite",
+    "test": "bun test",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"

@@ -22,7 +22,8 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ['←', '→'],       label: 'Back or forward 5 seconds' },
       { keys: ['J', 'L'],       label: 'Slower or faster' },
       { keys: ['C'],            label: 'Hear the selection as if it were cut' },
-      { keys: ['Tab', '⇧Tab'],  label: 'Next or previous cut' },
+      { keys: ['⌥↓', '⌥↑'],  label: 'Next or previous cut' },
+      { keys: ['F6'], label: 'Switch text / waveform focus' },
     ],
   },
   {
