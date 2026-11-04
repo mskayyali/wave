@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Wave — free, local audio editing for Mac</title>
 <meta name="description" content="Free audio editing for Mac. Edit your transcript and waveform with local Whisper or Parakeet models, or connect an AI agent through MCP.">
-<meta name="theme-color" content="#161616">
-<link rel="icon" type="image/svg+xml" href="wave.svg">
+<meta name="theme-color" content="#0f0f0f">
+<link rel="icon" type="image/png" href="app-logo.png">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Wave — free, local audio editing for Mac">
 <meta property="og:description" content="Edit the words. Shape the audio. Free to use, with local transcription and MCP support for AI agents.">
@@ -18,7 +18,7 @@
 @font-face { font-family: Plex; src: url(fonts/IBMPlexSans-Regular-Latin1.woff2) format('woff2'); font-weight: 400; font-display: swap; }
 @font-face { font-family: Plex; src: url(fonts/IBMPlexSans-Medium-Latin1.woff2) format('woff2'); font-weight: 500; font-display: swap; }
 @font-face { font-family: Plex; src: url(fonts/IBMPlexSans-SemiBold-Latin1.woff2) format('woff2'); font-weight: 600; font-display: swap; }
-:root { color-scheme: dark; --background: #161616; --foreground: #f4f4f4; --secondary: #c6c6c6; --muted: #8d8d8d; --accent: #e8a020; --accent-hover: #f0b535; }
+:root { color-scheme: dark; --background: #0f0f0f; --foreground: #f4f4f4; --secondary: #c6c6c6; --muted: #8d8d8d; --accent: #e8a020; --accent-hover: #f0b535; }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body { background: var(--background); color: var(--foreground); font: 400 16px/1.45 Plex, -apple-system, BlinkMacSystemFont, sans-serif; -webkit-font-smoothing: antialiased; }
@@ -30,7 +30,7 @@ h1, h2, p, figure { margin: 0; }
 .page { width: min(1500px, 100%); height: 100svh; height: 100dvh; margin-inline: auto; padding: 0 clamp(24px, 4vw, 64px); display: grid; grid-template-rows: 84px minmax(0, 1fr) 60px; }
 header, footer { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
 .brand { display: inline-flex; align-items: center; gap: 12px; font-size: 25px; font-weight: 600; }
-.brand svg { color: var(--accent); width: 31px; height: 28px; }
+.brand img { width: 40px; height: 40px; object-fit: contain; }
 nav { display: flex; align-items: center; gap: 28px; color: var(--secondary); font-size: 14px; }
 main { display: grid; grid-template-columns: minmax(300px, .8fr) minmax(0, 1.4fr); align-items: center; gap: clamp(32px, 4vw, 64px); padding-block: 20px; min-height: 0; }
 h1 { font-size: clamp(38px, 4vw, 59px); line-height: 1.06; font-weight: 500; max-width: 9em; text-wrap: balance; }
@@ -65,7 +65,8 @@ dialog img { display: block; width: auto; height: auto; max-width: calc(100vw - 
 }
 @media (max-width: 800px) {
   .page { padding-inline: 24px; grid-template-rows: 64px minmax(0, 1fr) 44px; }
-  .brand { font-size: 23px; }
+  .brand { font-size: 23px; gap: 10px; }
+  .brand img { width: 32px; height: 32px; }
   nav { gap: 20px; font-size: 13px; }
   main { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); gap: 20px; padding-block: 12px; }
   h1 { font-size: clamp(34px, 6vw, 46px); max-width: 13em; }
@@ -114,7 +115,7 @@ dialog img { display: block; width: auto; height: auto; max-width: calc(100vw - 
 <body>
 <div class="page">
   <header>
-    <a class="brand" href="https://mskayyali.github.io/wave/" aria-label="Wave home"><svg viewBox="0 0 32 28" fill="none" aria-hidden="true"><path d="M2 10v8m7-15v22m7-18v14m7-17v20m7-14v8" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>Wave</a>
+    <a class="brand" href="https://mskayyali.github.io/wave/" aria-label="Wave home"><img src="app-logo.png" width="256" height="256" alt="">Wave</a>
     <nav aria-label="Main navigation"><a href="https://github.com/mskayyali/wave#using-wave-with-claude-or-chatgpt">Connect an agent</a><a href="https://github.com/mskayyali/wave">GitHub ↗</a></nav>
   </header>
   <main>
@@ -130,7 +131,7 @@ dialog img { display: block; width: auto; height: auto; max-width: calc(100vw - 
     </div>
     <figure class="product">
       <button class="screen" id="open-editor" aria-label="Enlarge the screenshot of Wave"><img src="editor.jpg" width="3600" height="2260" alt="Wave 1.2 editing a sample speech, with transcript cuts, an added pause, the matching waveform and edit history" fetchpriority="high"></button>
-      <figcaption><span>A real edit in Wave, made through MCP</span><span>Click to inspect ↗</span></figcaption>
+      <figcaption><span>Edit in Wave, made through MCP</span><span>Click to inspect ↗</span></figcaption>
     </figure>
   </main>
   <footer><p>Made by <a href="https://mskayyali.com">Saleh Kayyali</a></p><div><a href="https://github.com/mskayyali/wave/releases/latest">Install help</a><a href="https://github.com/mskayyali/wave/issues">Feedback</a></div></footer>
