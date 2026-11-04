@@ -4,7 +4,7 @@ import { check, type Update } from '@tauri-apps/plugin-updater';
 import { activity } from './activity';
 import { APP_VERSION } from './appInfo';
 
-// Updates. The updater plugin reads latest.json from the newest GitHub release,
+// Updates. The updater plugin reads latest-v2.json from the newest GitHub release,
 // downloads the new Wave.app, checks its signature against the public key in
 // tauri.conf.json, and swaps it in; the new version runs from the next start.
 // scripts/release.sh publishes them.

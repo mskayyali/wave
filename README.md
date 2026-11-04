@@ -33,7 +33,7 @@ Nothing else: no account, no FFmpeg, no Python.
 
 ### Updates
 
-From version 1.1, Wave updates itself. It checks quietly in the background, and when there's a new version, a small dot appears beside the version in the sidebar (and in the editor's top bar). Click it to see what's new, then choose **Update and restart** or **Later**. Wave never installs or restarts without asking, and if a transcription or export is running, it waits for it to finish. You can also use **Wave → Check for Updates…**, or turn automatic checks off in **Settings → Updates**.
+Wave updates itself. **If you use 1.1.0, download and install 1.2.0 manually once:** the updater signing key has been replaced. Your projects and models are retained. Future updates work automatically from 1.2.0 onward. It checks quietly in the background, and when there's a new version, a small dot appears beside the version in the sidebar (and in the editor's top bar). Click it to see what's new, then choose **Update and restart** or **Later**. Wave never installs or restarts without asking, and if a transcription or export is running, it waits for it to finish. You can also use **Wave → Check for Updates…**, or turn automatic checks off in **Settings → Updates**.
 
 ## Quick start
 
@@ -153,10 +153,10 @@ Releases are signed, so installed copies of Wave only accept updates that really
 2. Write what's new in a Markdown file, then publish:
 
    ```bash
-   scripts/release.sh 1.1.0 notes.md
+   scripts/release.sh 1.2.0 notes.md
    ```
 
-The script bumps the version, builds Wave and its signed update, and publishes a GitHub release with the DMG, the update and `latest.json`, which installed copies read. The first time, it also adds the key's public half to `src-tauri/tauri.conf.json`. If the key is ever lost, installed copies can't update any more, and everyone has to download the next version by hand once.
+The script bumps the version, builds Wave and its signed update, and publishes a GitHub release with the DMG, the update and `latest-v2.json`, which installed copies from 1.2.0 onward read. Each release also includes the unchanged `release-notes/legacy-updater.json` as `latest.json`, keeping 1.1.0 installations from being offered an incompatible update. The first time, it also adds the key's public half to `src-tauri/tauri.conf.json`. If the key is ever lost, installed copies can't update any more, and everyone has to download the next version by hand once.
 
 ### How it's put together
 

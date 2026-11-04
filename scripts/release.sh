@@ -37,7 +37,7 @@ command -v gh >/dev/null || die "the GitHub CLI (gh) is needed"
 command -v bun >/dev/null || die "bun is needed"
 
 # Developer ID and notarization are the default. A deliberately unnotarized
-# release still requires the existing updater key: installed apps verify it.
+# release still requires the configured updater key: installed apps verify it.
 if [[ "${WAVE_UNNOTARIZED:-0}" == "1" ]]; then
   IDENTITY="-"
   echo "Building with ad-hoc app signing; users will need macOS Open Anyway."
@@ -132,7 +132,8 @@ xcrun stapler staple -q "$DMG"
 spctl --assess --type open --context context:primary-signature "$DMG" || die "Gatekeeper refuses the DMG"
 fi
 
-# 3. latest.json: what installed copies read to find the update.
+# 3. The new signing key uses its own feed. Keep the original feed at 1.1.0
+# so older copies do not offer a package they cannot authenticate.
 OUT="$BUNDLE/release"
 rm -rf "$OUT" && mkdir -p "$OUT"
 cp "$DMG" "$UPDATE" "$UPDATE.sig" "$OUT/"
@@ -143,7 +144,13 @@ node -e '
   const signature = fs.readFileSync(sigFile, "utf8").trim();
   const url = `https://github.com/${repo}/releases/download/v${version}/Wave.app.tar.gz`;
   const manifest = { version, notes, pub_date: new Date().toISOString(), platforms: { "darwin-aarch64": { signature, url } } };
-  fs.writeFileSync(`${out}/latest.json`, JSON.stringify(manifest, null, 2) + "\n");
+  fs.writeFileSync(`${out}/latest-v2.json`, JSON.stringify(manifest, null, 2) + "\n");
+  const legacy = fs.readFileSync("release-notes/legacy-updater.json", "utf8");
+  const previous = JSON.parse(legacy);
+  if (previous.version !== "1.1.0" || previous.platforms["darwin-aarch64"].url !== `https://github.com/${repo}/releases/download/v1.1.0/Wave.app.tar.gz`) {
+    throw new Error("The legacy update feed must remain pinned to Wave 1.1.0");
+  }
+  fs.writeFileSync(`${out}/latest.json`, legacy);
 ' "$VERSION" "$NOTES" "$UPDATE.sig" "$OUT" "$REPO"
 
 # The GitHub release page also tells first-time downloaders how to install,
@@ -160,7 +167,7 @@ Wave runs on Macs with Apple Silicon (M1 or later) and macOS 13.4 or later.
 1. Open \`Wave_${VERSION}_aarch64.dmg\` and drag Wave to Applications.
 2. Open Wave and choose **Whisper** (1.6 GB) or **Parakeet v3** (681 MB) in Settings.
 
-Already using Wave 1.1 or later? It offers this update by itself.
+**Updating from 1.1.0:** install this DMG manually once. Wave 1.2.0 uses a replacement updater signing key; after this installation, future releases can update automatically again. Your projects and downloaded models stay in place.
 
 MP3 export uses LAME 3.100, bundled as a separate library under the LGPL. Its source is at https://sourceforge.net/projects/lame/files/lame/3.100/
 
@@ -196,7 +203,7 @@ git commit -q -m "Wave $VERSION"
 git tag "v$VERSION"
 git push -q origin main "v$VERSION"
 gh release create "v$VERSION" --repo "$REPO" --title "Wave $VERSION" --notes-file "$OUT/release-notes.md" \
-  "$OUT/Wave_${VERSION}_aarch64.dmg" "$OUT/Wave.app.tar.gz" "$OUT/Wave.app.tar.gz.sig" "$OUT/latest.json"
+  "$OUT/Wave_${VERSION}_aarch64.dmg" "$OUT/Wave.app.tar.gz" "$OUT/Wave.app.tar.gz.sig" "$OUT/latest-v2.json" "$OUT/latest.json"
 
 echo "Published https://github.com/$REPO/releases/tag/v$VERSION"
-echo "Installed copies of Wave (1.1 or later) offer it the next time they check."
+echo "Wave 1.1.0 requires one manual installation; 1.2.0 and later use the new signed update feed."

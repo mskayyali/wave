@@ -1,0 +1,11 @@
+{
+  "version": "1.1.0",
+  "notes": "- Wave now updates itself. It checks for new versions quietly, shows you what's new, and installs only when you choose **Update and restart**, or **Later**.\n- **Settings → Updates** shows where things stand. Check for updates there, or turn automatic checks off.\n- If a transcription or export is running when you restart for an update, Wave waits for it to finish first.",
+  "pub_date": "2026-10-17T21:10:26.737Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRV3ZpWFVIL09XcDlQd0lTL0loRVJuY01ZUzQ4alBPdHloWHNQeXJaUWJTQVJHRTduOTFHNlNhSCtpNWNHdG9LNkNsR0Z3QkdyNGlabDFpSGhLQTNxZlNxa2VWZ2NQUndNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMjcxNDI2CWZpbGU6V2F2ZS5hcHAudGFyLmd6CXZlcnNpb246MS4xLjAKT3dRYi96MWQ5RFlwOW9ocnpoNlREQStBbi9LZFl2QXMvMmF6WGU2TkNCNFdPU2xRZ3JkVDk1YzJzNkMxL1BiOWdnSW9aemZ5V0xZc1c5T0MvNzlWQmc9PQo=",
+      "url": "https://github.com/mskayyali/wave/releases/download/v1.1.0/Wave.app.tar.gz"
+    }
+  }
+}
