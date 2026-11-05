@@ -6,7 +6,7 @@
 
 ## Download
 
-**[Download Wave 1.2.0 for Mac](https://github.com/mskayyali/wave/releases/download/v1.2.0/Wave_1.2.0_aarch64.dmg)** (DMG). Earlier versions are on the [releases page](https://github.com/mskayyali/wave/releases), and there's a [website](https://mskayyali.github.io/wave/) too.
+**[Download Wave 1.2.1 for Mac](https://github.com/mskayyali/wave/releases/download/v1.2.1/Wave_1.2.1_aarch64.dmg)** (DMG). Earlier versions are on the [releases page](https://github.com/mskayyali/wave/releases), and there's a [website](https://mskayyali.github.io/wave/) too.
 
 ### What you need
 
@@ -19,7 +19,7 @@ Nothing else: no account, no FFmpeg, no Python.
 ### Install
 
 1. Open the DMG and drag **Wave** into **Applications**.
-2. Open Wave. It isn't notarized by Apple yet, so the first time, macOS says it can't verify that Wave is free of malware. Click **Done**, open **System Settings → Privacy & Security**, scroll down to the message about Wave and click **Open Anyway**, then confirm. You only do this once.
+2. Open Wave. The app and installer are signed with Developer ID and notarized by Apple. macOS may ask you to confirm opening an app downloaded from the internet the first time.
 
    Or, in Terminal:
 
@@ -33,7 +33,7 @@ Nothing else: no account, no FFmpeg, no Python.
 
 ### Updates
 
-Wave updates itself. **If you use 1.1.0, download and install 1.2.0 manually once:** the updater signing key has been replaced. Your projects and models are retained. Future updates work automatically from 1.2.0 onward. It checks quietly in the background, and when there's a new version, a small dot appears beside the version in the sidebar (and in the editor's top bar). Click it to see what's new, then choose **Update and restart** or **Later**. Wave never installs or restarts without asking, and if a transcription or export is running, it waits for it to finish. You can also use **Wave → Check for Updates…**, or turn automatic checks off in **Settings → Updates**.
+Wave updates itself. **If you use 1.1.0, download and install the current release manually once:** the updater signing key was replaced in 1.2.0. Your projects and models are retained. Updates work automatically from 1.2.0 onward, including the notarized 1.2.1 release. It checks quietly in the background, and when there's a new version, a small dot appears beside the version in the sidebar (and in the editor's top bar). Click it to see what's new, then choose **Update and restart** or **Later**. Wave never installs or restarts without asking, and if a transcription or export is running, it waits for it to finish. You can also use **Wave → Check for Updates…**, or turn automatic checks off in **Settings → Updates**.
 
 ## Quick start
 
@@ -155,7 +155,7 @@ The release script defaults to Developer ID signing and Apple notarization. Conf
 2. Write what's new in a Markdown file, then publish:
 
    ```bash
-   scripts/release.sh 1.2.0 notes.md
+   scripts/release.sh 1.2.2 notes.md
    ```
 
 The script bumps the version, builds Wave and its signed update, and publishes a GitHub release with the DMG, the update and `latest-v2.json`, which installed copies from 1.2.0 onward read. Each release also includes the unchanged `release-notes/legacy-updater.json` as `latest.json`, keeping 1.1.0 installations from being offered an incompatible update. The first time, it also adds the key's public half to `src-tauri/tauri.conf.json`. If the key is ever lost, installed copies can't update any more, and everyone has to download the next version by hand once.
