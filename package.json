@@ -1,7 +1,7 @@
 {
   "name": "wave",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.2.1",
   "type": "module",
   "scripts": {
     "setup:parakeet": "python3 scripts/setup-parakeet.py",

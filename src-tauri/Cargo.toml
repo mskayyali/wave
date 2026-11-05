@@ -1,6 +1,6 @@
 [package]
 name = "wave"
-version = "1.2.0"
+version = "1.2.1"
 description = "Wave: a text-based audio editor for podcasts"
 authors = ["Saleh"]
 edition = "2021"
