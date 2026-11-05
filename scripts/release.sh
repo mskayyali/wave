@@ -42,6 +42,14 @@ if [[ "${WAVE_UNNOTARIZED:-0}" == "1" ]]; then
   IDENTITY="-"
   echo "Building with ad-hoc app signing; users will need macOS Open Anyway."
 else
+NOTARY_CONFIG="${WAVE_NOTARIZATION_CONFIG:-$HOME/.tauri/wave-notarization.json}"
+if [[ -f "$NOTARY_CONFIG" ]]; then
+  for field in APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH; do
+    if [[ -z "${!field:-}" ]]; then
+      printf -v "$field" '%s' "$(node -e 'const c = require(process.argv[1]); process.stdout.write(c[process.argv[2]] || "")' "$NOTARY_CONFIG" "$field")"
+    fi
+  done
+fi
 IDENTITY="${APPLE_SIGNING_IDENTITY:-$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)}"
 [[ -n "$IDENTITY" ]] || die "no Developer ID Application certificate in the keychain (Xcode → Settings → Accounts → Manage Certificates → + → Developer ID Application)"
 [[ -n "${APPLE_API_KEY:-}" && -n "${APPLE_API_ISSUER:-}" ]] \
@@ -100,6 +108,11 @@ node -e '
 (cd src-tauri && cargo update -q -p wave --precise "$VERSION" 2>/dev/null || cargo metadata -q --format-version 1 >/dev/null)
 
 # 2. Build: the app, the DMG, and the update (Wave.app.tar.gz and its signature).
+# Tauri signs frameworks and sidecars, but resources are copied as-is. The
+# speech runtime's nested code must be signed before the app is sealed.
+if [[ "${WAVE_UNNOTARIZED:-0}" != "1" ]]; then
+  python3 scripts/sign-runtime.py src-tauri/vendor/nemo-speech/runtime --identity "$IDENTITY"
+fi
 # Tauri signs the app with the Developer ID and the hardened runtime (which
 # notarization requires), has Apple notarize it, staples the ticket, and only
 # then packs the DMG and the update, so both carry the notarized app.
@@ -120,6 +133,7 @@ spctl --assess --type execute "$APP" || die "Gatekeeper refuses the app"
 TEAM=$(codesign -dv "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')
 LAME_TEAM=$(codesign -dv "$APP/Contents/Frameworks/libmp3lame.0.dylib" 2>&1 | sed -n 's/^TeamIdentifier=//p')
 [[ -n "$TEAM" && "$TEAM" == "$LAME_TEAM" ]] || die "LAME isn't signed by the app's team ($TEAM), so MP3 export would fail"
+python3 scripts/sign-runtime.py "$APP/Contents/Resources/nemo-speech" --verify-team "$TEAM"
 
 # The DMG is notarized too, and the ticket stapled to it, so it opens without a
 # warning even offline.

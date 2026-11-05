@@ -144,6 +144,8 @@ MP3 export uses LAME, which is prebuilt in `src-tauri/vendor/lame/`. To rebuild 
 
 Releases are signed, so installed copies of Wave only accept updates that really come from you.
 
+The release script defaults to Developer ID signing and Apple notarization. Configure `APPLE_API_KEY`, `APPLE_API_ISSUER` and `APPLE_API_KEY_PATH` in the environment, or as fields in `~/.tauri/wave-notarization.json` outside the repository. The corresponding Developer ID Application identity must be available in the Mac keychain. Nested Parakeet code is signed before Tauri seals the app, and its signing team is verified alongside LAME before publication. `WAVE_UNNOTARIZED=1` explicitly selects the earlier Open Anyway installation flow.
+
 1. Once, make the updater's key. It asks for a password. Keep both safe, and never commit them:
 
    ```bash
