@@ -22,6 +22,9 @@
 # WAVE_UNNOTARIZED=1 keeps the existing Gatekeeper "Open Anyway" flow.
 # WAVE_PUBLISH=1 skips the terminal confirmation when publication is already authorized.
 set -euo pipefail
+# Release artifacts must remain readable when installed by another Mac user.
+# Credentials already live outside this tree with their own private modes.
+umask 022
 
 VERSION="${1:-}"
 NOTES="${2:-}"
@@ -125,7 +128,9 @@ UPDATE="$BUNDLE/macos/Wave.app.tar.gz"
 [[ -f "$DMG" && -f "$UPDATE" && -f "$UPDATE.sig" ]] || die "the build didn't produce the DMG and the signed update"
 codesign --verify --deep --strict "$APP" || die "the app's signature doesn't verify"
 if [[ "${WAVE_UNNOTARIZED:-0}" != "1" ]]; then
-codesign -dv "$APP" 2>&1 | grep -q '^CodeDirectory.*flags=.*runtime' || die "the app wasn't signed with the hardened runtime"
+# Consume all output: grep -q can close the pipe early and make codesign fail
+# under pipefail even when the runtime flag is present.
+codesign -dv "$APP" 2>&1 | grep '^CodeDirectory.*flags=.*runtime' >/dev/null || die "the app wasn't signed with the hardened runtime"
 xcrun stapler validate -q "$APP" || die "the app has no notarization ticket: did Tauri notarize it? (its log says why not)"
 spctl --assess --type execute "$APP" || die "Gatekeeper refuses the app"
 # The hardened runtime loads only libraries signed by the same team: LAME must
